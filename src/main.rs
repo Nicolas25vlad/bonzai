@@ -5,13 +5,16 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.4";
+const VERSION: &str = "0.2.5";
 const TICK_SECS: u64 = 30;
-const ACTION_COOLDOWN_MS: u64 = 850;
+const ACTION_COOLDOWN_MS: u64 = 420;
+
+static TERMINAL_SIZE: OnceLock<(usize, usize)> = OnceLock::new();
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
@@ -278,10 +281,15 @@ fn daemon_loop() -> io::Result<()> {
             Ok((mut stream, _)) => {
                 let mut line = String::new();
                 BufReader::new(stream.try_clone()?).read_line(&mut line)?;
-                let response = handle_command(&mut st, line.trim(), &mut should_stop);
-                save_state(&st)?;
-                // A health probe or client may disconnect before reading the reply.
-                // That must never terminate the authoritative daemon.
+                let command = line.trim();
+                let response = handle_command(&mut st, command, &mut should_stop);
+                // Read-only probes are frequent while the viewer is open. Persist only
+                // mutations; elapsed time is still checkpointed by the periodic save.
+                if !matches!(command, "ping" | "snapshot") {
+                    save_state(&st)?;
+                }
+                // A client may disconnect before reading the reply. That must never
+                // terminate the authoritative daemon.
                 let _ = stream.write_all(response.as_bytes());
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -556,7 +564,6 @@ fn branch_glyph(kind: BranchKind, life: i32, dx: i32, dy: i32) -> &'static str {
 }
 
 fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tropism: f32) {
-    let count = (7.0 + vigor * 13.0) as i32;
     let pull = if tropism > 0.25 {
         1
     } else if tropism < -0.25 {
@@ -564,17 +571,39 @@ fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tr
     } else {
         0
     };
-    for _ in 0..count {
-        let mut dx = rng.range(-4, 5);
-        if pull != 0 && rng.chance(42, 100) {
-            dx += pull;
+    let pads = (2.0 + vigor * 3.0).round() as i32;
+    let density = (72.0 + vigor * 23.0) as u64;
+
+    for _ in 0..pads {
+        let light_shift = if pull != 0 && rng.chance(45, 100) {
+            pull * 2
+        } else {
+            0
+        };
+        let px = x + rng.range(-5, 6) + light_shift;
+        let py = y + rng.range(-2, 3);
+        let width = rng.range(3, 7);
+        let height = rng.range(1, 4);
+
+        for row in 0..height {
+            let edge_taper = i32::from(height > 1 && (row == 0 || row == height - 1));
+            let row_width = (width - edge_taper).max(2);
+            let start_x = px - row_width / 2 + rng.range(-1, 2);
+            let row_y = py + row - height / 2;
+
+            for col in 0..row_width {
+                if rng.chance(density, 100) {
+                    let bright = rng.chance((10.0 + vigor * 18.0) as u64, 100);
+                    c.set(start_x + col, row_y, '&', if bright { 3 } else { 2 });
+                }
+            }
         }
-        let dy = rng.range(-2, 3);
-        let bright = rng.chance((12.0 + vigor * 20.0) as u64, 100);
-        c.set(x + dx, y + dy, '&', if bright { 3 } else { 2 });
     }
 }
 
+// Recursive growth carries explicit branch state. The flat signature makes
+// each recursive transition visible and auditable.
+#[allow(clippy::too_many_arguments)]
 fn draw_cb_branch(
     c: &mut Canvas,
     rng: &mut Rng,
@@ -654,18 +683,21 @@ fn draw_cb_branch(
             );
         }
 
-        let branch_gate = ((12.0 + vigor * 17.0) as u64).min(34);
+        let branch_gate = ((16.0 + vigor * 20.0) as u64).min(38);
         if depth < 3 && shoot_cooldown <= 0 && life > 5 && rng.chance(branch_gate, 100) {
             let prefer_right = tropism > 0.2;
             let prefer_left = tropism < -0.2;
-            let side = if prefer_right && rng.chance(63, 100) {
-                1
-            } else if prefer_left && rng.chance(63, 100) {
-                -1
-            } else if rng.chance(1, 2) {
-                -1
+            let preferred_side = if prefer_right {
+                Some(1)
+            } else if prefer_left {
+                Some(-1)
             } else {
-                1
+                None
+            };
+            let side = match preferred_side {
+                Some(side) if rng.chance(63, 100) => side,
+                _ if rng.chance(1, 2) => -1,
+                _ => 1,
             };
 
             let pruned = (side < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 10))
@@ -729,20 +761,18 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
         st.prune_right,
     );
 
-    // Classic compact cbonsai-style planter.
-    let pot = ["(---./~~~\\.---)", " (           ) ", "  (_________)  "];
-    for (i, row) in pot.iter().enumerate() {
+    // Wide, quiet planter inspired by cbonsai's classic terminal silhouette.
+    let pot = [
+        ("      .-----------------.      ", 2u8),
+        (r"       \               /       ", 7u8),
+        (r"        \_____________/        ", 7u8),
+        ("        (_)         (_)        ", 7u8),
+    ];
+    for (i, (row, kind)) in pot.iter().enumerate() {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
             if ch != ' ' {
-                let kind = if i == 0 && matches!(ch, '~' | '.' | '/' | '\\') {
-                    1
-                } else if i == 0 && ch == '-' {
-                    3
-                } else {
-                    7
-                };
-                c.set(sx + j as i32, base_y + i as i32, ch, kind);
+                c.set(sx + j as i32, base_y + i as i32, ch, *kind);
             }
         }
     }
@@ -816,6 +846,10 @@ fn mood(st: &State) -> &'static str {
 }
 
 fn terminal_size() -> (usize, usize) {
+    *TERMINAL_SIZE.get_or_init(detect_terminal_size)
+}
+
+fn detect_terminal_size() -> (usize, usize) {
     let env_rows = env::var("LINES").ok().and_then(|v| v.parse::<usize>().ok());
     let env_cols = env::var("COLUMNS")
         .ok()
@@ -908,8 +942,8 @@ fn center_line(line: &str, cols: usize) -> String {
 }
 
 fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
-    let w = 58;
-    let h = 25;
+    let w = 68;
+    let h = 28;
     let mut c = grow_tree(st, w, h);
     if let Some(effect) = effect {
         apply_effect(&mut c, effect);
@@ -965,7 +999,6 @@ fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
 
     let top_pad = rows.saturating_sub(lines.len()) / 2;
     let mut out = String::new();
-    out.push_str("\x1b[?25l\x1b[2J\x1b[H");
     out.push_str(&"\n".repeat(top_pad));
     for line in lines {
         out.push_str(&center_line(&line, cols));
@@ -976,6 +1009,20 @@ fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
 
 fn render(st: &State) -> String {
     render_scene(st, None)
+}
+
+fn paint_frame(frame: &str) -> io::Result<()> {
+    let mut out = String::with_capacity(frame.len() + 256);
+    out.push_str("\x1b[H");
+    for line in frame.lines() {
+        out.push_str(line);
+        out.push_str("\x1b[K\n");
+    }
+    out.push_str("\x1b[J");
+
+    let mut stdout = io::stdout();
+    stdout.write_all(out.as_bytes())?;
+    stdout.flush()
 }
 
 fn human_age(s: u64) -> String {
@@ -998,13 +1045,10 @@ fn get_snapshot() -> State {
 
 fn animate_water(st: &State) -> io::Result<()> {
     for frame in 0..3 {
-        print!("{}", render_scene(st, Some(SceneEffect::Water(frame))));
-        io::stdout().flush()?;
-        thread::sleep(Duration::from_millis(90));
+        paint_frame(&render_scene(st, Some(SceneEffect::Water(frame))))?;
+        thread::sleep(Duration::from_millis(65));
     }
-    print!("{}", render(st));
-    io::stdout().flush()?;
-    Ok(())
+    paint_frame(&render(st))
 }
 
 fn animate_light(direction: &str, st: &State) -> io::Result<()> {
@@ -1014,13 +1058,10 @@ fn animate_light(direction: &str, st: &State) -> io::Result<()> {
         _ => 0,
     };
     for frame in 0..2 {
-        print!("{}", render_scene(st, Some(SceneEffect::Light(dir, frame))));
-        io::stdout().flush()?;
-        thread::sleep(Duration::from_millis(100));
+        paint_frame(&render_scene(st, Some(SceneEffect::Light(dir, frame))))?;
+        thread::sleep(Duration::from_millis(75));
     }
-    print!("{}", render(st));
-    io::stdout().flush()?;
-    Ok(())
+    paint_frame(&render(st))
 }
 
 fn animate_prune(side: &str, st: &State) -> io::Result<()> {
@@ -1030,16 +1071,10 @@ fn animate_prune(side: &str, st: &State) -> io::Result<()> {
         _ => 0,
     };
     for frame in 0..2 {
-        print!(
-            "{}",
-            render_scene(st, Some(SceneEffect::Prune(side, frame)))
-        );
-        io::stdout().flush()?;
-        thread::sleep(Duration::from_millis(90));
+        paint_frame(&render_scene(st, Some(SceneEffect::Prune(side, frame))))?;
+        thread::sleep(Duration::from_millis(70));
     }
-    print!("{}", render(st));
-    io::stdout().flush()?;
-    Ok(())
+    paint_frame(&render(st))
 }
 
 fn watch_help() -> String {
@@ -1060,7 +1095,6 @@ fn watch_help() -> String {
     ];
 
     let mut out = String::new();
-    out.push_str("\x1b[2J\x1b[H");
     let (rows, _) = terminal_size();
     out.push_str(&"\n".repeat(rows.saturating_sub(lines.len()) / 2));
     for line in lines {
@@ -1070,34 +1104,21 @@ fn watch_help() -> String {
     out
 }
 
-fn drain_input() {
-    let _ = Command::new("stty")
-        .args(["min", "0", "time", "0"])
-        .status();
-    let mut buf = [0u8; 64];
-    loop {
-        match io::stdin().read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-    }
-    let _ = Command::new("stty")
-        .args(["min", "0", "time", "1"])
-        .status();
-}
-
 fn watch() -> io::Result<()> {
     let _ = Command::new("stty")
         .args(["-echo", "-icanon", "min", "0", "time", "1"])
         .status();
 
+    print!("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+    io::stdout().flush()?;
+
     let result = (|| {
         let mut last_action = Instant::now() - Duration::from_millis(ACTION_COOLDOWN_MS);
-        loop {
-            let st = get_snapshot();
-            print!("{}", render(&st));
-            io::stdout().flush()?;
+        let mut last_sync = Instant::now();
+        let mut st = get_snapshot();
+        paint_frame(&render(&st))?;
 
+        loop {
             let mut buf = [0u8; 1];
             if io::stdin().read(&mut buf).unwrap_or(0) > 0 {
                 let key = buf[0] as char;
@@ -1108,88 +1129,66 @@ fn watch() -> io::Result<()> {
                 if matches!(key, 'w' | 'r' | 'a' | 's' | 'd' | 'j' | 'k' | 'l')
                     && last_action.elapsed() < Duration::from_millis(ACTION_COOLDOWN_MS)
                 {
-                    let (_, cols) = terminal_size();
-                    let msg = format!("{MUTED}give the tree a second{RESET}");
-                    print!("\x1b[2J\x1b[H\n{}\n", center_line(&msg, cols));
-                    io::stdout().flush()?;
-                    drain_input();
-                    thread::sleep(Duration::from_millis(180));
                     continue;
                 }
 
                 match key {
                     'w' | 'r' => {
                         let _ = send("water")?;
-                        let after = get_snapshot();
-                        animate_water(&after)?;
+                        st = get_snapshot();
+                        animate_water(&st)?;
                         last_action = Instant::now();
-                        drain_input();
+                        last_sync = Instant::now();
                     }
-                    'a' => {
-                        let _ = send("light left")?;
-                        let after = get_snapshot();
-                        animate_light("left", &after)?;
+                    'a' | 's' | 'd' => {
+                        let direction = match key {
+                            'a' => "left",
+                            'd' => "right",
+                            _ => "center",
+                        };
+                        let _ = send(&format!("light {direction}"))?;
+                        st = get_snapshot();
+                        animate_light(direction, &st)?;
                         last_action = Instant::now();
-                        drain_input();
+                        last_sync = Instant::now();
                     }
-                    's' => {
-                        let _ = send("light center")?;
-                        let after = get_snapshot();
-                        animate_light("center", &after)?;
+                    'j' | 'k' | 'l' => {
+                        let side = match key {
+                            'j' => "left",
+                            'l' => "right",
+                            _ => "top",
+                        };
+                        let _ = send(&format!("prune {side}"))?;
+                        st = get_snapshot();
+                        animate_prune(side, &st)?;
                         last_action = Instant::now();
-                        drain_input();
-                    }
-                    'd' => {
-                        let _ = send("light right")?;
-                        let after = get_snapshot();
-                        animate_light("right", &after)?;
-                        last_action = Instant::now();
-                        drain_input();
-                    }
-                    'j' => {
-                        let _ = send("prune left")?;
-                        let after = get_snapshot();
-                        animate_prune("left", &after)?;
-                        last_action = Instant::now();
-                        drain_input();
-                    }
-                    'k' => {
-                        let _ = send("prune top")?;
-                        let after = get_snapshot();
-                        animate_prune("top", &after)?;
-                        last_action = Instant::now();
-                        drain_input();
-                    }
-                    'l' => {
-                        let _ = send("prune right")?;
-                        let after = get_snapshot();
-                        animate_prune("right", &after)?;
-                        last_action = Instant::now();
-                        drain_input();
+                        last_sync = Instant::now();
                     }
                     'h' | '?' => {
-                        print!("{}", watch_help());
-                        io::stdout().flush()?;
-                        let _ = Command::new("stty")
-                            .args(["min", "1", "time", "0"])
-                            .status();
-                        let _ = io::stdin().read(&mut buf);
-                        let _ = Command::new("stty")
-                            .args(["min", "0", "time", "1"])
-                            .status();
-                        drain_input();
+                        paint_frame(&watch_help())?;
+                        loop {
+                            if io::stdin().read(&mut buf).unwrap_or(0) > 0 {
+                                break;
+                            }
+                        }
+                        paint_frame(&render(&st))?;
                     }
                     _ => {}
                 }
             }
 
-            thread::sleep(Duration::from_millis(90));
+            if last_sync.elapsed() >= Duration::from_secs(2) {
+                st = get_snapshot();
+                paint_frame(&render(&st))?;
+                last_sync = Instant::now();
+            }
         }
         Ok(())
     })();
 
     let _ = Command::new("stty").arg("sane").status();
-    print!("\x1b[?25h\x1b[0m\n");
+    print!("\x1b[?25h\x1b[?1049l\x1b[0m");
+    let _ = io::stdout().flush();
     result
 }
 
@@ -1289,8 +1288,11 @@ fn print_status(st: &State) {
         st.health
     );
     println!(
-        "{SOIL}memory{RESET} L {:.1}h  C {:.1}h  R {:.1}h",
-        st.light_left_hours, st.light_center_hours, st.light_right_hours
+        "{SOIL}memory{RESET} L {:.1}h  C {:.1}h  R {:.1}h  ·  total {:.1}h",
+        st.light_left_hours,
+        st.light_center_hours,
+        st.light_right_hours,
+        st.total_light_hours()
     );
     println!("{DIM}Tip: `bonzai watch` for a quiet break.{RESET}");
 }
