@@ -80,7 +80,7 @@ bonzai update
 | --- | --- |
 | **Persistent** | Growth is based on elapsed real time, not how long the viewer stays open. |
 | **Environmental** | Directional light, drought and overwatering leave memory that influences future growth. |
-| **Procedural** | The visible tree is reconstructed deterministically from its persistent state. |
+| **Procedural** | Branches have persistent identities. New growth extends existing tips instead of rebuilding the tree from scratch. |
 | **Terminal-native** | It is designed to sit beside your shell, editor or tmux session rather than imitate a desktop app. |
 | **Local** | No account, cloud service, telemetry or network daemon is required. |
 | **Small** | The Rust core has zero external crate dependencies. |
@@ -121,6 +121,9 @@ Bonzai is not a scientific plant simulator. It borrows a few plant behaviors and
               persistent state
                      │
                      ▼
+            persistent branch graph
+                     │
+                     ▼
               branch growth
                      │
                      ▼
@@ -130,9 +133,9 @@ Bonzai is not a scientific plant simulator. It borrows a few plant behaviors and
                terminal tree
 ```
 
-Keep the light on one side and new growth gradually favors it. Leave the tree in low light and shoots stretch more. Drought and repeated overwatering reduce vigor. Pruning suppresses future growth in the affected region.
+Keep the light on one side and new branches gradually favor it. Leave the tree in low light and growth slows and stretches. Drought and repeated overwatering reduce vigor. Pruning cuts a real stored branch; later growth can emerge from the surviving structure.
 
-The current environment is a condition. **The shape of the tree is a history.**
+Each branch stores its parent, direction, attachment point, length, age and cut state. Existing branches keep their identity as the tree grows. **The current environment is a condition. The shape of the tree is a history.**
 
 ## Small by design
 

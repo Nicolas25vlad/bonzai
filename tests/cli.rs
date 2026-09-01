@@ -150,6 +150,9 @@ fn init_creates_a_complete_bounded_state_file() {
         "light_right_hours",
         "drought_stress",
         "wet_stress",
+        "tree_step",
+        "tree_next_id",
+        "tree_nodes",
     ] {
         assert!(state.contains_key(key), "missing state key: {key}");
     }

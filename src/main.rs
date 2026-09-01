@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.8";
+const VERSION: &str = "0.3.0";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
 
@@ -27,6 +27,69 @@ const SUN: &str = "\x1b[38;5;221m";
 const HEALTH: &str = "\x1b[38;5;151m";
 const MUTED: &str = "\x1b[38;5;245m";
 const SOIL: &str = "\x1b[38;5;130m";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BranchNode {
+    id: u32,
+    parent: u32,
+    side: i8,
+    depth: u8,
+    length: u8,
+    age: u16,
+    lean: i8,
+    attach: u8,
+    cut: bool,
+    born_step: u32,
+}
+
+impl BranchNode {
+    fn root() -> Self {
+        Self {
+            id: 0,
+            parent: u32::MAX,
+            side: 0,
+            depth: 0,
+            length: 4,
+            age: 0,
+            lean: 0,
+            attach: 0,
+            cut: false,
+            born_step: 0,
+        }
+    }
+
+    fn encode(&self) -> String {
+        format!(
+            "{},{},{},{},{},{},{},{},{},{}",
+            self.id,
+            self.parent,
+            self.side,
+            self.depth,
+            self.length,
+            self.age,
+            self.lean,
+            self.attach,
+            u8::from(self.cut),
+            self.born_step,
+        )
+    }
+
+    fn parse_record(record: &str) -> Option<Self> {
+        let mut p = record.split(',');
+        Some(Self {
+            id: p.next()?.parse().ok()?,
+            parent: p.next()?.parse().ok()?,
+            side: p.next()?.parse().ok()?,
+            depth: p.next()?.parse().ok()?,
+            length: p.next()?.parse().ok()?,
+            age: p.next()?.parse().ok()?,
+            lean: p.next()?.parse().ok()?,
+            attach: p.next()?.parse().ok()?,
+            cut: p.next()?.parse::<u8>().ok()? != 0,
+            born_step: p.next()?.parse().ok()?,
+        })
+    }
+}
 
 #[derive(Clone, Debug)]
 struct State {
@@ -46,12 +109,15 @@ struct State {
     light_right_hours: f32,
     drought_stress: f32,
     wet_stress: f32,
+    tree_step: u32,
+    tree_next_id: u32,
+    tree_nodes: Vec<BranchNode>,
 }
 
 impl State {
     fn new() -> Self {
         let now = now_secs();
-        Self {
+        let mut st = Self {
             seed: now ^ (std::process::id() as u64).rotate_left(17),
             born_at: now,
             last_tick: now,
@@ -68,6 +134,232 @@ impl State {
             light_right_hours: 0.0,
             drought_stress: 0.0,
             wet_stress: 0.0,
+            tree_step: 0,
+            tree_next_id: 1,
+            tree_nodes: vec![BranchNode::root()],
+        };
+        st.sync_tree_memory();
+        st
+    }
+
+    fn reset_tree_memory(&mut self) {
+        self.tree_step = 0;
+        self.tree_next_id = 1;
+        self.tree_nodes.clear();
+        self.tree_nodes.push(BranchNode::root());
+    }
+
+    fn node_index(&self, id: u32) -> Option<usize> {
+        self.tree_nodes.iter().position(|node| node.id == id)
+    }
+
+    fn node_visible(&self, id: u32) -> bool {
+        let mut current = id;
+        for _ in 0..=self.tree_nodes.len() {
+            let Some(index) = self.node_index(current) else {
+                return false;
+            };
+            let node = &self.tree_nodes[index];
+            if node.cut {
+                return false;
+            }
+            if node.parent == u32::MAX {
+                return true;
+            }
+            current = node.parent;
+        }
+        false
+    }
+
+    fn subtree_size(&self, root: u32) -> usize {
+        self.tree_nodes
+            .iter()
+            .filter(|node| {
+                if !self.node_visible(node.id) {
+                    return false;
+                }
+                let mut current = node.id;
+                for _ in 0..=self.tree_nodes.len() {
+                    if current == root {
+                        return true;
+                    }
+                    let Some(index) = self.node_index(current) else {
+                        return false;
+                    };
+                    let parent = self.tree_nodes[index].parent;
+                    if parent == u32::MAX {
+                        return false;
+                    }
+                    current = parent;
+                }
+                false
+            })
+            .count()
+    }
+
+    fn add_branch(&mut self, parent: &BranchNode, side: i8, lean: i8, attach: u8, step: u32) {
+        if self.tree_nodes.len() >= 96 || parent.depth >= 3 {
+            return;
+        }
+        let id = self.tree_next_id;
+        self.tree_next_id = self.tree_next_id.saturating_add(1);
+        self.tree_nodes.push(BranchNode {
+            id,
+            parent: parent.id,
+            side,
+            depth: parent.depth + 1,
+            length: 2,
+            age: 0,
+            lean,
+            attach,
+            cut: false,
+            born_step: step,
+        });
+    }
+
+    fn grow_structure_step(&mut self, step: u32) {
+        for node in &mut self.tree_nodes {
+            if !node.cut {
+                node.age = node.age.saturating_add(1);
+            }
+        }
+
+        if step <= 2 {
+            self.tree_nodes[0].length = self.tree_nodes[0].length.saturating_add(1).min(18);
+            return;
+        }
+        if step == 3 {
+            let root = self.tree_nodes[0].clone();
+            let attach = root.length.saturating_sub(2).max(2);
+            self.add_branch(&root, -1, -1, attach, step);
+            return;
+        }
+        if step == 4 {
+            let root = self.tree_nodes[0].clone();
+            let attach = root.length.saturating_sub(1).max(2);
+            self.add_branch(&root, 1, 1, attach, step);
+            return;
+        }
+
+        let mut rng = Rng::new(self.seed ^ (step as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let candidates: Vec<usize> = self
+            .tree_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| !node.cut && node.depth <= 3 && self.node_visible(node.id))
+            .map(|(index, _)| index)
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+
+        let index = candidates[(rng.next() as usize) % candidates.len()];
+        let parent = self.tree_nodes[index].clone();
+        let child_count = self
+            .tree_nodes
+            .iter()
+            .filter(|node| node.parent == parent.id && !node.cut)
+            .count();
+        let max_len = match parent.depth {
+            0 => 18,
+            1 => 11,
+            2 => 8,
+            _ => 6,
+        };
+
+        if parent.length < max_len && (child_count >= 2 || rng.chance(58, 100)) {
+            self.tree_nodes[index].length = self.tree_nodes[index].length.saturating_add(1);
+            return;
+        }
+
+        if parent.depth >= 3 || child_count >= 3 || self.tree_nodes.len() >= 96 {
+            if parent.length < max_len {
+                self.tree_nodes[index].length = self.tree_nodes[index].length.saturating_add(1);
+            }
+            return;
+        }
+
+        let light_bias = self.photo_bias() + self.light_dir as f32 * 0.22;
+        let prune_bias = (self.prune_left.min(6) as f32 - self.prune_right.min(6) as f32) * 0.08;
+        let shape_bias = (light_bias + prune_bias).clamp(-1.2, 1.2);
+        let random_side = if rng.chance(1, 2) { -1 } else { 1 };
+        let side = if parent.side == 0 {
+            if shape_bias > 0.18 && rng.chance(68, 100) {
+                1
+            } else if shape_bias < -0.18 && rng.chance(68, 100) {
+                -1
+            } else {
+                random_side
+            }
+        } else if rng.chance(72, 100) {
+            parent.side
+        } else {
+            -parent.side
+        };
+        let light_pull = if shape_bias > 0.22 {
+            1
+        } else if shape_bias < -0.22 {
+            -1
+        } else {
+            0
+        };
+        let lean = (side + light_pull).clamp(-2, 2);
+        let low_attach = if parent.id == 0 { 3 } else { 1 };
+        let high_attach = i32::from(parent.length.max(low_attach + 1));
+        let attach = rng.range(i32::from(low_attach), high_attach) as u8;
+        self.add_branch(&parent, side, lean, attach, step);
+    }
+
+    fn sync_tree_memory(&mut self) {
+        if self.tree_nodes.is_empty() {
+            self.reset_tree_memory();
+        }
+        let target = self.growth.floor().clamp(0.0, 100.0) as u32;
+        while self.tree_step < target {
+            self.tree_step += 1;
+            self.grow_structure_step(self.tree_step);
+        }
+        if let Some(max_id) = self.tree_nodes.iter().map(|node| node.id).max() {
+            self.tree_next_id = self.tree_next_id.max(max_id.saturating_add(1));
+        }
+    }
+
+    fn cut_branch(&mut self, side: &str) -> Option<u32> {
+        self.sync_tree_memory();
+        let candidates: Vec<u32> = self
+            .tree_nodes
+            .iter()
+            .filter(|node| {
+                node.id != 0
+                    && !node.cut
+                    && self.node_visible(node.id)
+                    && match side {
+                        "left" => node.side < 0,
+                        "right" => node.side > 0,
+                        _ => true,
+                    }
+            })
+            .map(|node| node.id)
+            .collect();
+
+        let chosen = candidates.into_iter().max_by_key(|id| {
+            let node = &self.tree_nodes[self.node_index(*id).expect("candidate must exist")];
+            (self.subtree_size(*id), node.depth, node.id)
+        })?;
+        let index = self.node_index(chosen)?;
+        self.tree_nodes[index].cut = true;
+        Some(chosen)
+    }
+
+    fn apply_legacy_pruning(&mut self) {
+        for _ in 0..self.prune_left.min(3) {
+            let _ = self.cut_branch("left");
+        }
+        for _ in 0..self.prune_right.min(3) {
+            let _ = self.cut_branch("right");
+        }
+        for _ in 0..self.prune_top.min(3) {
+            let _ = self.cut_branch("top");
         }
     }
 
@@ -113,6 +405,7 @@ impl State {
             let rate = 0.86 * comfort * (self.health / 100.0);
             self.growth = (self.growth + rate * dt_hours).clamp(0.0, 100.0);
         }
+        self.sync_tree_memory();
     }
 
     fn age_secs(&self) -> u64 {
@@ -129,8 +422,14 @@ impl State {
     }
 
     fn serialize(&self) -> String {
+        let nodes = self
+            .tree_nodes
+            .iter()
+            .map(BranchNode::encode)
+            .collect::<Vec<_>>()
+            .join(";");
         format!(
-            "seed={}\nborn_at={}\nlast_tick={}\nwater={:.4}\nlight={:.4}\nhealth={:.4}\ngrowth={:.4}\nlight_dir={}\nprune_left={}\nprune_right={}\nprune_top={}\nlight_left_hours={:.4}\nlight_center_hours={:.4}\nlight_right_hours={:.4}\ndrought_stress={:.4}\nwet_stress={:.4}\n",
+            "seed={}\nborn_at={}\nlast_tick={}\nwater={:.4}\nlight={:.4}\nhealth={:.4}\ngrowth={:.4}\nlight_dir={}\nprune_left={}\nprune_right={}\nprune_top={}\nlight_left_hours={:.4}\nlight_center_hours={:.4}\nlight_right_hours={:.4}\ndrought_stress={:.4}\nwet_stress={:.4}\ntree_step={}\ntree_next_id={}\ntree_nodes={}\n",
             self.seed,
             self.born_at,
             self.last_tick,
@@ -147,11 +446,15 @@ impl State {
             self.light_right_hours,
             self.drought_stress,
             self.wet_stress,
+            self.tree_step,
+            self.tree_next_id,
+            nodes,
         )
     }
 
     fn parse(s: &str) -> Option<Self> {
         let mut st = State::new();
+        let mut saw_tree_nodes = false;
         for line in s.lines() {
             let Some((k, v)) = line.split_once('=') else {
                 continue;
@@ -173,8 +476,32 @@ impl State {
                 "light_right_hours" => st.light_right_hours = v.parse().ok()?,
                 "drought_stress" => st.drought_stress = v.parse().ok()?,
                 "wet_stress" => st.wet_stress = v.parse().ok()?,
+                "tree_step" => st.tree_step = v.parse().ok()?,
+                "tree_next_id" => st.tree_next_id = v.parse().ok()?,
+                "tree_nodes" => {
+                    saw_tree_nodes = true;
+                    st.tree_nodes = if v.is_empty() {
+                        Vec::new()
+                    } else {
+                        v.split(';').filter_map(BranchNode::parse_record).collect()
+                    };
+                }
                 _ => {}
             }
+        }
+
+        if saw_tree_nodes {
+            st.tree_nodes.sort_by_key(|node| node.id);
+            if st.tree_nodes.is_empty() || st.tree_nodes[0].id != 0 {
+                st.tree_nodes.insert(0, BranchNode::root());
+            }
+            st.sync_tree_memory();
+        } else {
+            // v0.2.x stored only environmental state. Rebuild one structural
+            // baseline from that history once, then persist branch identities.
+            st.reset_tree_memory();
+            st.sync_tree_memory();
+            st.apply_legacy_pruning();
         }
         Some(st)
     }
@@ -333,6 +660,7 @@ fn handle_command(st: &mut State, cmd: &str, stop: &mut bool) -> String {
         }
         "prune" => {
             let side = parts.next().unwrap_or("top");
+            let _ = st.cut_branch(side);
             let count = match side {
                 "left" => {
                     st.prune_left = st.prune_left.saturating_add(1);
@@ -418,18 +746,8 @@ impl Rng {
     }
 }
 
-// Visual grammar intentionally follows the classic cbonsai look.
-// cbonsai is GPL-3.0 and credited in README.md. Bonzai keeps its own
-// persistent simulation while using a compatible terminal aesthetic.
-#[derive(Copy, Clone, PartialEq)]
-enum BranchKind {
-    Trunk,
-    Left,
-    Right,
-    Dying,
-    Dead,
-}
-
+// Visual grammar follows the classic cbonsai vocabulary, but topology now
+// comes from persistent branch nodes instead of being regenerated per frame.
 fn draw_str(c: &mut Canvas, x: i32, y: i32, text: &str, kind: u8) {
     let width = text.chars().count() as i32;
     let start_x = x - width / 2;
@@ -440,142 +758,71 @@ fn draw_str(c: &mut Canvas, x: i32, y: i32, text: &str, kind: u8) {
     }
 }
 
-fn branch_delta(rng: &mut Rng, kind: BranchKind, age: i32, vigor: f32, tropism: f32) -> (i32, i32) {
-    let light_pull = if tropism > 0.25 {
-        1
-    } else if tropism < -0.25 {
+#[allow(dead_code)]
+fn is_tree_cell(cell: Cell) -> bool {
+    matches!(cell.kind, 1..=5)
+}
+
+fn segment_delta(node: &BranchNode, segment: u8, rng: &mut Rng) -> (i32, i32) {
+    if node.id == 0 && segment < 4 {
+        return (0, -1);
+    }
+
+    if node.side == 0 {
+        let dx = if node.lean != 0 && rng.chance(30, 100) {
+            node.lean.signum() as i32
+        } else if rng.chance(24, 100) {
+            rng.range(-1, 2)
+        } else {
+            0
+        };
+        let dy = if rng.chance(82, 100) { -1 } else { 0 };
+        return (dx.clamp(-1, 1), dy);
+    }
+
+    let outward = i32::from(node.side.signum());
+    let mut dx = if rng.chance(68, 100) { outward } else { 0 };
+    if node.lean.signum() == node.side.signum() && rng.chance(18, 100) {
+        dx += outward;
+    }
+    let dy = if rng.chance(44 + u64::from(node.depth) * 8, 100) {
         -1
     } else {
         0
     };
-
-    match kind {
-        BranchKind::Trunk => {
-            // Keep a readable stem above the planter before the trunk begins
-            // wandering. Without this anchor young trees can look like foliage
-            // floating directly over the pot.
-            if age <= 4 {
-                return (0, -1);
-            }
-
-            let mut dx = rng.range(-1, 2);
-            if light_pull != 0 && rng.chance(24, 100) {
-                dx += light_pull;
-            }
-            let dy = if rng.chance((62.0 + vigor * 24.0) as u64, 100) {
-                -1
-            } else {
-                0
-            };
-            (dx.clamp(-2, 2), dy)
-        }
-        BranchKind::Left => {
-            let mut dx = match rng.next() % 10 {
-                0 | 1 => -2,
-                2..=6 => -1,
-                7 | 8 => 0,
-                _ => 1,
-            };
-            if light_pull < 0 && rng.chance(30, 100) {
-                dx -= 1;
-            }
-            let dy = match rng.next() % 10 {
-                0 | 1 => -1,
-                8 | 9 => 1,
-                _ => 0,
-            };
-            (dx.clamp(-3, 1), dy)
-        }
-        BranchKind::Right => {
-            let mut dx = match rng.next() % 10 {
-                0 | 1 => 2,
-                2..=6 => 1,
-                7 | 8 => 0,
-                _ => -1,
-            };
-            if light_pull > 0 && rng.chance(30, 100) {
-                dx += 1;
-            }
-            let dy = match rng.next() % 10 {
-                0 | 1 => -1,
-                8 | 9 => 1,
-                _ => 0,
-            };
-            (dx.clamp(-1, 3), dy)
-        }
-        BranchKind::Dying => {
-            let mut dx = rng.range(-3, 4);
-            if light_pull != 0 && rng.chance(28, 100) {
-                dx += light_pull;
-            }
-            let dy = if rng.chance(18, 100) {
-                -1
-            } else if rng.chance(8, 100) {
-                1
-            } else {
-                0
-            };
-            (dx.clamp(-3, 3), dy)
-        }
-        BranchKind::Dead => (rng.range(-1, 2), rng.range(-1, 2)),
-    }
+    (dx.clamp(-2, 2), dy)
 }
 
-fn branch_glyph(kind: BranchKind, life: i32, dx: i32, dy: i32) -> &'static str {
-    if life < 4 || matches!(kind, BranchKind::Dying | BranchKind::Dead) {
-        return "&";
-    }
-
-    match kind {
-        BranchKind::Trunk => {
-            if dy == 0 {
-                "/~"
-            } else if dx < 0 {
-                "\\|"
-            } else if dx == 0 {
-                "/|\\"
-            } else {
-                "|/"
-            }
+fn segment_glyph(node: &BranchNode, dx: i32, dy: i32) -> &'static str {
+    if node.side == 0 {
+        if dx < 0 {
+            "\\|"
+        } else if dx > 0 {
+            "|/"
+        } else if dy < 0 {
+            "/|\\"
+        } else {
+            "/~"
         }
-        BranchKind::Left => {
-            if dy > 0 {
-                "\\"
-            } else if dy == 0 {
-                "\\_"
-            } else if dx < 0 {
-                "\\|"
-            } else if dx == 0 {
-                "/|"
-            } else {
-                "/"
-            }
+    } else if node.side < 0 {
+        if dy < 0 {
+            "\\|"
+        } else if dx < 0 {
+            "\\_"
+        } else {
+            "\\"
         }
-        BranchKind::Right => {
-            if dy > 0 {
-                "/"
-            } else if dy == 0 {
-                "_/"
-            } else if dx < 0 {
-                "\\|"
-            } else if dx == 0 {
-                "/|"
-            } else {
-                "/"
-            }
-        }
-        BranchKind::Dying | BranchKind::Dead => "&",
-    }
-}
-
-fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tropism: f32) {
-    let pull = if tropism > 0.25 {
-        1
-    } else if tropism < -0.25 {
-        -1
+    } else if dy < 0 {
+        "/|"
+    } else if dx > 0 {
+        "_/"
     } else {
-        0
-    };
+        "/"
+    }
+}
+
+fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, lean: i8) {
+    let pull = i32::from(lean.signum());
     let pads = (2.0 + vigor * 3.0).round() as i32;
     let density = (72.0 + vigor * 23.0) as u64;
 
@@ -595,15 +842,9 @@ fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tr
             let row_width = (width - edge_taper).max(2);
             let start_x = px - row_width / 2 + rng.range(-1, 2);
             let row_y = py + row - height / 2;
-
-            // Keep foliage above a small visual buffer around the planter.
-            // Branches may descend slightly, but leaves should never appear to
-            // grow through the ceramic body.
-            let foliage_floor = c.h - 9;
-            if row_y >= foliage_floor {
+            if row_y >= c.h - 9 {
                 continue;
             }
-
             for col in 0..row_width {
                 if rng.chance(density, 100) {
                     let bright = rng.chance((10.0 + vigor * 18.0) as u64, 100);
@@ -614,213 +855,72 @@ fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tr
     }
 }
 
-// Recursive growth carries explicit branch state. The flat signature makes
-// each recursive transition visible and auditable.
-#[allow(clippy::too_many_arguments)]
-fn draw_cb_branch(
-    c: &mut Canvas,
-    rng: &mut Rng,
-    mut x: i32,
-    mut y: i32,
-    kind: BranchKind,
-    mut life: i32,
-    depth: u8,
-    vigor: f32,
-    tropism: f32,
-    prune_left: u32,
-    prune_right: u32,
-) {
-    let start_life = life.max(1);
-    let mut age = 0;
-    let mut shoot_cooldown = 3i32;
+fn draw_persistent_tree(c: &mut Canvas, st: &State, base_x: i32, base_y: i32) {
+    let stress = ((st.drought_stress + st.wet_stress) / 75.0).clamp(0.0, 0.72);
+    let vigor = ((st.health / 100.0) * (1.0 - stress)).clamp(0.18, 1.0);
+    let max_id = st.tree_nodes.iter().map(|node| node.id).max().unwrap_or(0) as usize;
+    let mut paths: Vec<Vec<(i32, i32)>> = vec![Vec::new(); max_id + 1];
 
-    while life > 0 && y > 2 && y < c.h - 4 {
-        life -= 1;
-        age += 1;
-
-        let effective_kind = if life < 4 { BranchKind::Dying } else { kind };
-        let (dx, dy) = branch_delta(rng, effective_kind, age, vigor, tropism);
-
-        x = (x + dx).clamp(3, c.w - 5);
-        y = (y + dy).clamp(2, c.h - 6);
-
-        // Dying/dead branch tips render as `&`, so they must obey the
-        // same lower foliage boundary as leaf sprays.
-        if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) && y >= c.h - 9 {
+    for node in &st.tree_nodes {
+        let node_index = node.id as usize;
+        if node_index >= paths.len() {
             continue;
         }
 
-        let glyph = branch_glyph(effective_kind, life, dx, dy);
-        let cell_kind = if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) {
-            if rng.chance(18, 100) {
-                3
-            } else {
-                2
-            }
-        } else if rng.chance(45, 100) {
-            1
+        let start = if node.parent == u32::MAX {
+            Some((base_x, base_y))
         } else {
-            5
+            let parent_index = node.parent as usize;
+            let Some(parent_path) = paths.get(parent_index) else {
+                continue;
+            };
+            if parent_path.is_empty() {
+                None
+            } else {
+                let attach = usize::from(node.attach).min(parent_path.len() - 1);
+                Some(parent_path[attach])
+            }
         };
-        draw_str(c, x, y, glyph, cell_kind);
+        let Some((mut x, mut y)) = start else {
+            continue;
+        };
 
-        if life <= 2 {
-            draw_leaf_spray(c, rng, x, y, vigor, tropism);
-            if depth < 3 {
-                let leaf_life = 2 + rng.range(0, 3);
-                draw_cb_branch(
-                    c,
-                    rng,
-                    x,
-                    y,
-                    BranchKind::Dead,
-                    leaf_life,
-                    depth + 1,
-                    vigor,
-                    tropism,
-                    prune_left,
-                    prune_right,
-                );
+        if node.cut {
+            if node.parent != u32::MAX {
+                c.set(x, y, '+', 5);
             }
             continue;
         }
 
-        if kind == BranchKind::Trunk && life < 6 && depth < 3 {
-            let dying_life = 3 + rng.range(0, 3);
-            draw_cb_branch(
-                c,
-                rng,
-                x,
-                y,
-                BranchKind::Dying,
-                dying_life,
-                depth + 1,
-                vigor,
-                tropism,
-                prune_left,
-                prune_right,
-            );
-        }
-
-        let branch_gate = ((16.0 + vigor * 20.0) as u64).min(38);
-        if depth < 3 && shoot_cooldown <= 0 && life > 5 && rng.chance(branch_gate, 100) {
-            let prefer_right = tropism > 0.2;
-            let prefer_left = tropism < -0.2;
-            let preferred_side = if prefer_right {
-                Some(1)
-            } else if prefer_left {
-                Some(-1)
+        let mut rng =
+            Rng::new(st.seed ^ (u64::from(node.id) + 1).wrapping_mul(0xD1B5_4A32_D192_ED03));
+        let mut path = vec![(x, y)];
+        for segment in 0..node.length {
+            let (dx, dy) = segment_delta(node, segment, &mut rng);
+            x = (x + dx).clamp(3, c.w - 4);
+            y = (y + dy).clamp(2, c.h - 6);
+            if node.depth > 0 && y >= c.h - 8 {
+                y = (y - 1).max(2);
+            }
+            let glyph = segment_glyph(node, dx, dy);
+            let kind = if node.depth == 0 || rng.chance(55, 100) {
+                1
             } else {
-                None
+                5
             };
-            let side = match preferred_side {
-                Some(side) if rng.chance(63, 100) => side,
-                _ if rng.chance(1, 2) => -1,
-                _ => 1,
-            };
-
-            let pruned = (side < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 10))
-                || (side > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
-
-            if !pruned {
-                let child_kind = if side < 0 {
-                    BranchKind::Left
-                } else {
-                    BranchKind::Right
-                };
-                let child_life = ((life + start_life / 5) as f32 * (0.62 + vigor * 0.2)) as i32;
-                draw_cb_branch(
-                    c,
-                    rng,
-                    x,
-                    y,
-                    child_kind,
-                    child_life.max(5),
-                    depth + 1,
-                    vigor,
-                    tropism,
-                    prune_left,
-                    prune_right,
-                );
-            }
-            shoot_cooldown = 4;
+            draw_str(c, x, y, glyph, kind);
+            path.push((x, y));
         }
+        paths[node_index] = path;
 
-        shoot_cooldown -= 1;
-    }
-}
-
-fn is_tree_cell(cell: Cell) -> bool {
-    matches!(cell.kind, 1..=5)
-}
-
-fn clear_tree_cell(c: &mut Canvas, x: i32, y: i32) {
-    if is_tree_cell(c.get(x, y)) {
-        c.set(x, y, ' ', 0);
-    }
-}
-
-fn apply_prune_shape(c: &mut Canvas, st: &State) {
-    let center = c.w / 2;
-    let canopy_bottom = (c.h - 9).max(3);
-
-    if st.prune_left > 0 {
-        let mut leftmost: Option<i32> = None;
-        for y in 2..canopy_bottom {
-            for x in 0..(center - 3).max(0) {
-                if is_tree_cell(c.get(x, y)) {
-                    leftmost = Some(leftmost.map_or(x, |current| current.min(x)));
-                }
-            }
-        }
-        if let Some(leftmost) = leftmost {
-            let bite = 1 + st.prune_left.min(6) as i32 * 2;
-            let cut_x = (leftmost + bite).min(center - 4);
-            for y in 2..canopy_bottom {
-                for x in 0..=cut_x.max(0) {
-                    clear_tree_cell(c, x, y);
-                }
-            }
-        }
-    }
-
-    if st.prune_right > 0 {
-        let mut rightmost: Option<i32> = None;
-        for y in 2..canopy_bottom {
-            for x in (center + 4).min(c.w - 1)..c.w {
-                if is_tree_cell(c.get(x, y)) {
-                    rightmost = Some(rightmost.map_or(x, |current| current.max(x)));
-                }
-            }
-        }
-        if let Some(rightmost) = rightmost {
-            let bite = 1 + st.prune_right.min(6) as i32 * 2;
-            let cut_x = (rightmost - bite).max(center + 4);
-            for y in 2..canopy_bottom {
-                for x in cut_x.min(c.w - 1)..c.w {
-                    clear_tree_cell(c, x, y);
-                }
-            }
-        }
-    }
-
-    if st.prune_top > 0 {
-        let mut topmost: Option<i32> = None;
-        for y in 2..canopy_bottom {
-            for x in 0..c.w {
-                if is_tree_cell(c.get(x, y)) {
-                    topmost = Some(topmost.map_or(y, |current| current.min(y)));
-                }
-            }
-        }
-        if let Some(topmost) = topmost {
-            let bite = 1 + st.prune_top.min(6) as i32 * 2;
-            let cut_y = (topmost + bite).min(canopy_bottom - 2);
-            for y in 0..=cut_y.max(0) {
-                for x in 0..c.w {
-                    clear_tree_cell(c, x, y);
-                }
-            }
+        let has_live_child = st
+            .tree_nodes
+            .iter()
+            .any(|child| child.parent == node.id && !child.cut && st.node_visible(child.id));
+        if !has_live_child && y < c.h - 9 {
+            let mut leaf_rng =
+                Rng::new(st.seed ^ (u64::from(node.id) + 17).wrapping_mul(0x94D0_49BB_1331_11EB));
+            draw_leaf_spray(c, &mut leaf_rng, x, y, vigor, node.lean);
         }
     }
 }
@@ -829,38 +929,9 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     let mut c = Canvas::new(w, h);
     let base_y = h - 5;
     let base_x = w / 2;
-    let mut rng = Rng::new(st.seed);
 
-    let photo = st.photo_bias();
-    let current_light_bias = st.light_dir as f32 * (st.light / 100.0) * 0.22;
-    let tropism = (photo * 1.1 + current_light_bias).clamp(-1.2, 1.2);
-    let stress = ((st.drought_stress + st.wet_stress) / 75.0).clamp(0.0, 0.72);
-    let vigor = ((st.health / 100.0) * (1.0 - stress)).clamp(0.18, 1.0);
-    let low_light_stretch = ((100.0 - st.light) / 100.0 * 4.0) as i32;
+    draw_persistent_tree(&mut c, st, base_x, base_y);
 
-    let life =
-        12 + (st.growth / 100.0 * 22.0) as i32 + low_light_stretch - (st.prune_top.min(6) as i32);
-
-    draw_cb_branch(
-        &mut c,
-        &mut rng,
-        base_x,
-        base_y,
-        BranchKind::Trunk,
-        life.max(10),
-        0,
-        vigor,
-        tropism,
-        st.prune_left,
-        st.prune_right,
-    );
-
-    // Pruning must affect the tree that is already on screen, not only the
-    // probability of future branches. The mask clips the current silhouette in
-    // a deterministic way while the counters continue to influence growth.
-    apply_prune_shape(&mut c, st);
-
-    // Wide, quiet planter inspired by cbonsai's classic terminal silhouette.
     let pot = [
         ("      .-----------------.      ", 7u8),
         (r"       \               /       ", 7u8),
@@ -870,9 +941,6 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     for (i, (row, kind)) in pot.iter().enumerate() {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
-            // The planter is an opaque foreground object. Clearing spaces as
-            // well as drawing its outline prevents branches or leaves from
-            // showing through the inside of the pot.
             if ch == ' ' {
                 c.set(sx + j as i32, base_y + i as i32, ' ', 0);
             } else {
@@ -1264,6 +1332,7 @@ fn apply_local_command_result(st: &mut State, command: &str, response: &str) {
         }
         "prune" => {
             let side = parts.next().unwrap_or("top");
+            let _ = st.cut_branch(side);
             let count = response_count(response);
             match side {
                 "left" => st.prune_left = count.unwrap_or_else(|| st.prune_left.saturating_add(1)),

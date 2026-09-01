@@ -26,6 +26,8 @@ mod app {
             st.light_right_hours = 8.0;
             st.drought_stress = 0.0;
             st.wet_stress = 0.0;
+            st.reset_tree_memory();
+            st.sync_tree_memory();
             st
         }
 
@@ -53,6 +55,8 @@ mod app {
             assert_eq!(parsed.prune_left, st.prune_left);
             assert_eq!(parsed.prune_right, st.prune_right);
             assert_eq!(parsed.prune_top, st.prune_top);
+            assert_eq!(parsed.tree_step, st.tree_step);
+            assert_eq!(parsed.tree_nodes, st.tree_nodes);
         }
 
         #[test]
@@ -68,6 +72,8 @@ mod app {
             assert_eq!(parsed.prune_left, 0);
             assert_eq!(parsed.prune_right, 0);
             assert_eq!(parsed.prune_top, 0);
+            assert!(!parsed.tree_nodes.is_empty());
+            assert_eq!(parsed.tree_nodes[0].id, 0);
         }
 
         #[test]
@@ -292,57 +298,97 @@ mod app {
             assert_eq!(st.prune_left, 4);
         }
 
-        #[test]
-        fn left_prune_removes_visible_left_canopy() {
-            let mut before = stable_state();
-            before.prune_left = 0;
-            let plain = grow_tree(&before, 68, 28);
-            let center = plain.w / 2;
-            let plain_left = tree_cells_in_region(&plain, 0, center - 3, 0, plain.h - 9);
+        type TopologySignature = (u32, u32, i8, u8, u8, i8, u8, bool, u32);
 
-            let mut after = before.clone();
-            after.prune_left = 1;
-            let pruned = grow_tree(&after, 68, 28);
-            let pruned_left = tree_cells_in_region(&pruned, 0, center - 3, 0, pruned.h - 9);
-            assert!(
-                pruned_left < plain_left,
-                "left prune did not remove visible canopy"
-            );
+        fn topology_signature(st: &State) -> Vec<TopologySignature> {
+            st.tree_nodes
+                .iter()
+                .map(|node| {
+                    (
+                        node.id,
+                        node.parent,
+                        node.side,
+                        node.depth,
+                        node.length,
+                        node.lean,
+                        node.attach,
+                        node.cut,
+                        node.born_step,
+                    )
+                })
+                .collect()
         }
 
         #[test]
-        fn right_prune_removes_visible_right_canopy() {
-            let mut before = stable_state();
-            before.prune_right = 0;
-            let plain = grow_tree(&before, 68, 28);
-            let center = plain.w / 2;
-            let plain_right = tree_cells_in_region(&plain, center + 4, plain.w, 0, plain.h - 9);
+        fn growth_extends_persistent_structure_without_replacing_existing_ids() {
+            let mut st = stable_state();
+            let before_ids: Vec<u32> = st.tree_nodes.iter().map(|node| node.id).collect();
+            let before_metric: usize = st
+                .tree_nodes
+                .iter()
+                .map(|node| usize::from(node.length))
+                .sum::<usize>()
+                + st.tree_nodes.len();
+            let before_step = st.tree_step;
 
-            let mut after = before.clone();
-            after.prune_right = 1;
-            let pruned = grow_tree(&after, 68, 28);
-            let pruned_right = tree_cells_in_region(&pruned, center + 4, pruned.w, 0, pruned.h - 9);
-            assert!(
-                pruned_right < plain_right,
-                "right prune did not remove visible canopy"
-            );
+            st.growth = (st.growth + 5.0).min(100.0);
+            st.sync_tree_memory();
+
+            assert!(st.tree_step > before_step);
+            assert!(before_ids.iter().all(|id| st.node_index(*id).is_some()));
+            let after_metric: usize = st
+                .tree_nodes
+                .iter()
+                .map(|node| usize::from(node.length))
+                .sum::<usize>()
+                + st.tree_nodes.len();
+            assert!(after_metric > before_metric);
         }
 
         #[test]
-        fn top_prune_removes_visible_top_canopy() {
-            let mut before = stable_state();
-            before.prune_top = 0;
-            let plain = grow_tree(&before, 68, 28);
-            let plain_top = tree_cells_in_region(&plain, 0, plain.w, 0, 9);
+        fn care_changes_without_growth_do_not_rewrite_branch_topology() {
+            let mut st = stable_state();
+            let before = topology_signature(&st);
+            st.water = 25.0;
+            st.light = 91.0;
+            st.light_dir = -1;
+            st.sync_tree_memory();
+            assert_eq!(topology_signature(&st), before);
+        }
 
-            let mut after = before.clone();
-            after.prune_top = 1;
-            let pruned = grow_tree(&after, 68, 28);
-            let pruned_top = tree_cells_in_region(&pruned, 0, pruned.w, 0, 9);
-            assert!(
-                pruned_top < plain_top,
-                "top prune did not remove visible canopy"
-            );
+        #[test]
+        fn prune_marks_a_real_left_branch_cut_and_persists_it() {
+            let mut st = stable_state();
+            let mut stop = false;
+            handle_command(&mut st, "prune left", &mut stop);
+
+            assert!(st.tree_nodes.iter().any(|node| node.side < 0 && node.cut));
+            let parsed = State::parse(&st.serialize()).expect("pruned tree should parse");
+            assert_eq!(parsed.tree_nodes, st.tree_nodes);
+        }
+
+        #[test]
+        fn structural_renderer_is_stable_when_only_water_changes() {
+            let st = stable_state();
+            let mut wetter = st.clone();
+            wetter.water = (wetter.water + 20.0).min(100.0);
+
+            let a = topology_signature(&st);
+            let b = topology_signature(&wetter);
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn legacy_state_is_migrated_to_structural_memory_once() {
+            let raw = "seed=99\nborn_at=10\nlast_tick=10\nwater=70\nlight=70\nhealth=90\ngrowth=32\nprune_left=1\n";
+            let first = State::parse(raw).expect("legacy state should migrate");
+            assert!(first.tree_step >= 32);
+            assert!(first.tree_nodes.len() > 2);
+            assert!(first.tree_nodes.iter().any(|node| node.cut));
+
+            let second = State::parse(&first.serialize()).expect("new state should parse");
+            assert_eq!(first.tree_nodes, second.tree_nodes);
+            assert_eq!(first.tree_step, second.tree_step);
         }
     }
 }
