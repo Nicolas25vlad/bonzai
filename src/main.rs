@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.7";
+const VERSION: &str = "0.2.8";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
 
@@ -333,13 +333,22 @@ fn handle_command(st: &mut State, cmd: &str, stop: &mut bool) -> String {
         }
         "prune" => {
             let side = parts.next().unwrap_or("top");
-            match side {
-                "left" => st.prune_left = st.prune_left.saturating_add(1),
-                "right" => st.prune_right = st.prune_right.saturating_add(1),
-                _ => st.prune_top = st.prune_top.saturating_add(1),
-            }
+            let count = match side {
+                "left" => {
+                    st.prune_left = st.prune_left.saturating_add(1);
+                    st.prune_left
+                }
+                "right" => {
+                    st.prune_right = st.prune_right.saturating_add(1);
+                    st.prune_right
+                }
+                _ => {
+                    st.prune_top = st.prune_top.saturating_add(1);
+                    st.prune_top
+                }
+            };
             st.health = (st.health - 0.4).max(0.0);
-            format!("Pruned {side}.\n")
+            format!("Pruned {side}: {count}\n")
         }
         "reset" => {
             *st = State::new();
@@ -741,6 +750,81 @@ fn draw_cb_branch(
     }
 }
 
+fn is_tree_cell(cell: Cell) -> bool {
+    matches!(cell.kind, 1..=5)
+}
+
+fn clear_tree_cell(c: &mut Canvas, x: i32, y: i32) {
+    if is_tree_cell(c.get(x, y)) {
+        c.set(x, y, ' ', 0);
+    }
+}
+
+fn apply_prune_shape(c: &mut Canvas, st: &State) {
+    let center = c.w / 2;
+    let canopy_bottom = (c.h - 9).max(3);
+
+    if st.prune_left > 0 {
+        let mut leftmost: Option<i32> = None;
+        for y in 2..canopy_bottom {
+            for x in 0..(center - 3).max(0) {
+                if is_tree_cell(c.get(x, y)) {
+                    leftmost = Some(leftmost.map_or(x, |current| current.min(x)));
+                }
+            }
+        }
+        if let Some(leftmost) = leftmost {
+            let bite = 1 + st.prune_left.min(6) as i32 * 2;
+            let cut_x = (leftmost + bite).min(center - 4);
+            for y in 2..canopy_bottom {
+                for x in 0..=cut_x.max(0) {
+                    clear_tree_cell(c, x, y);
+                }
+            }
+        }
+    }
+
+    if st.prune_right > 0 {
+        let mut rightmost: Option<i32> = None;
+        for y in 2..canopy_bottom {
+            for x in (center + 4).min(c.w - 1)..c.w {
+                if is_tree_cell(c.get(x, y)) {
+                    rightmost = Some(rightmost.map_or(x, |current| current.max(x)));
+                }
+            }
+        }
+        if let Some(rightmost) = rightmost {
+            let bite = 1 + st.prune_right.min(6) as i32 * 2;
+            let cut_x = (rightmost - bite).max(center + 4);
+            for y in 2..canopy_bottom {
+                for x in cut_x.min(c.w - 1)..c.w {
+                    clear_tree_cell(c, x, y);
+                }
+            }
+        }
+    }
+
+    if st.prune_top > 0 {
+        let mut topmost: Option<i32> = None;
+        for y in 2..canopy_bottom {
+            for x in 0..c.w {
+                if is_tree_cell(c.get(x, y)) {
+                    topmost = Some(topmost.map_or(y, |current| current.min(y)));
+                }
+            }
+        }
+        if let Some(topmost) = topmost {
+            let bite = 1 + st.prune_top.min(6) as i32 * 2;
+            let cut_y = (topmost + bite).min(canopy_bottom - 2);
+            for y in 0..=cut_y.max(0) {
+                for x in 0..c.w {
+                    clear_tree_cell(c, x, y);
+                }
+            }
+        }
+    }
+}
+
 fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     let mut c = Canvas::new(w, h);
     let base_y = h - 5;
@@ -770,6 +854,11 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
         st.prune_left,
         st.prune_right,
     );
+
+    // Pruning must affect the tree that is already on screen, not only the
+    // probability of future branches. The mask clips the current silhouette in
+    // a deterministic way while the counters continue to influence growth.
+    apply_prune_shape(&mut c, st);
 
     // Wide, quiet planter inspired by cbonsai's classic terminal silhouette.
     let pot = [
@@ -1141,6 +1230,54 @@ fn get_snapshot() -> State {
     }
 }
 
+fn response_percent(response: &str) -> Option<f32> {
+    response
+        .split_whitespace()
+        .rev()
+        .find_map(|token| token.strip_suffix('%')?.parse::<f32>().ok())
+}
+
+fn response_count(response: &str) -> Option<u32> {
+    response
+        .split_whitespace()
+        .last()
+        .and_then(|token| token.trim_end_matches(['.', ',']).parse::<u32>().ok())
+}
+
+fn apply_local_command_result(st: &mut State, command: &str, response: &str) {
+    let mut parts = command.split_whitespace();
+    match parts.next().unwrap_or("") {
+        "water" => {
+            if let Some(water) = response_percent(response) {
+                st.water = water.clamp(0.0, 100.0);
+            }
+        }
+        "light" => {
+            if let Some(light) = response_percent(response) {
+                st.light = light.clamp(0.0, 100.0);
+            }
+            st.light_dir = match parts.next().unwrap_or("center") {
+                "left" => -1,
+                "right" => 1,
+                _ => 0,
+            };
+        }
+        "prune" => {
+            let side = parts.next().unwrap_or("top");
+            let count = response_count(response);
+            match side {
+                "left" => st.prune_left = count.unwrap_or_else(|| st.prune_left.saturating_add(1)),
+                "right" => {
+                    st.prune_right = count.unwrap_or_else(|| st.prune_right.saturating_add(1))
+                }
+                _ => st.prune_top = count.unwrap_or_else(|| st.prune_top.saturating_add(1)),
+            }
+            st.health = (st.health - 0.4).max(0.0);
+        }
+        _ => {}
+    }
+}
+
 fn animate_water(st: &State) -> io::Result<()> {
     let (rows, cols) = terminal_size();
     for frame in 0..3 {
@@ -1256,8 +1393,8 @@ fn watch() -> io::Result<()> {
 
                 match key {
                     'w' | 'r' => {
-                        let _ = send("water")?;
-                        st = get_snapshot();
+                        let response = send("water")?;
+                        apply_local_command_result(&mut st, "water", &response);
                         animate_water(&st)?;
                         last_action = Instant::now();
                         last_sync = Instant::now();
@@ -1268,8 +1405,9 @@ fn watch() -> io::Result<()> {
                             'd' => "right",
                             _ => "center",
                         };
-                        let _ = send(&format!("light {direction}"))?;
-                        st = get_snapshot();
+                        let command = format!("light {direction}");
+                        let response = send(&command)?;
+                        apply_local_command_result(&mut st, &command, &response);
                         animate_light(direction, &st)?;
                         last_action = Instant::now();
                         last_sync = Instant::now();
@@ -1280,8 +1418,9 @@ fn watch() -> io::Result<()> {
                             'l' => "right",
                             _ => "top",
                         };
-                        let _ = send(&format!("prune {side}"))?;
-                        st = get_snapshot();
+                        let command = format!("prune {side}");
+                        let response = send(&command)?;
+                        apply_local_command_result(&mut st, &command, &response);
                         animate_prune(side, &st)?;
                         last_action = Instant::now();
                         last_sync = Instant::now();

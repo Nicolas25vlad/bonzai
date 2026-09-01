@@ -260,5 +260,89 @@ mod app {
                 }
             }
         }
+
+        fn tree_cells_in_region(canvas: &Canvas, x0: i32, x1: i32, y0: i32, y1: i32) -> usize {
+            let mut total = 0usize;
+            for y in y0.max(0)..y1.min(canvas.h) {
+                for x in x0.max(0)..x1.min(canvas.w) {
+                    if is_tree_cell(canvas.get(x, y)) {
+                        total += 1;
+                    }
+                }
+            }
+            total
+        }
+
+        #[test]
+        fn water_response_updates_view_state_immediately() {
+            let mut st = stable_state();
+            st.water = 41.0;
+            apply_local_command_result(&mut st, "water", "Water: 63%\n");
+            assert_eq!(st.water, 63.0);
+
+            apply_local_command_result(&mut st, "water", "Water already high: 100%\n");
+            assert_eq!(st.water, 100.0);
+        }
+
+        #[test]
+        fn prune_response_updates_authoritative_counter_locally() {
+            let mut st = stable_state();
+            st.prune_left = 1;
+            apply_local_command_result(&mut st, "prune left", "Pruned left: 4\n");
+            assert_eq!(st.prune_left, 4);
+        }
+
+        #[test]
+        fn left_prune_removes_visible_left_canopy() {
+            let mut before = stable_state();
+            before.prune_left = 0;
+            let plain = grow_tree(&before, 68, 28);
+            let center = plain.w / 2;
+            let plain_left = tree_cells_in_region(&plain, 0, center - 3, 0, plain.h - 9);
+
+            let mut after = before.clone();
+            after.prune_left = 1;
+            let pruned = grow_tree(&after, 68, 28);
+            let pruned_left = tree_cells_in_region(&pruned, 0, center - 3, 0, pruned.h - 9);
+            assert!(
+                pruned_left < plain_left,
+                "left prune did not remove visible canopy"
+            );
+        }
+
+        #[test]
+        fn right_prune_removes_visible_right_canopy() {
+            let mut before = stable_state();
+            before.prune_right = 0;
+            let plain = grow_tree(&before, 68, 28);
+            let center = plain.w / 2;
+            let plain_right = tree_cells_in_region(&plain, center + 4, plain.w, 0, plain.h - 9);
+
+            let mut after = before.clone();
+            after.prune_right = 1;
+            let pruned = grow_tree(&after, 68, 28);
+            let pruned_right = tree_cells_in_region(&pruned, center + 4, pruned.w, 0, pruned.h - 9);
+            assert!(
+                pruned_right < plain_right,
+                "right prune did not remove visible canopy"
+            );
+        }
+
+        #[test]
+        fn top_prune_removes_visible_top_canopy() {
+            let mut before = stable_state();
+            before.prune_top = 0;
+            let plain = grow_tree(&before, 68, 28);
+            let plain_top = tree_cells_in_region(&plain, 0, plain.w, 0, 9);
+
+            let mut after = before.clone();
+            after.prune_top = 1;
+            let pruned = grow_tree(&after, 68, 28);
+            let pruned_top = tree_cells_in_region(&pruned, 0, pruned.w, 0, 9);
+            assert!(
+                pruned_top < plain_top,
+                "top prune did not remove visible canopy"
+            );
+        }
     }
 }
