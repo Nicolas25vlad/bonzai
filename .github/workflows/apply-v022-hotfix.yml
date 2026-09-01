@@ -1,0 +1,284 @@
+name: Apply v0.2.2 hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-v022-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch runtime, centering and updater
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/main.rs')
+          s = p.read_text()
+
+          s = s.replace('const VERSION: &str = "0.2.1";', 'const VERSION: &str = "0.2.2";')
+
+          s = s.replace(
+          '''fn daemon_running() -> bool {
+              UnixStream::connect(socket_path()).is_ok()
+          }''',
+          '''fn daemon_running() -> bool {
+              send("ping")
+                  .map(|reply| reply.trim() == "pong")
+                  .unwrap_or(false)
+          }''')
+
+          s = s.replace(
+          '''                save_state(&st)?;
+                          stream.write_all(response.as_bytes())?;''',
+          '''                save_state(&st)?;
+                          // A health probe or client may disconnect before reading the reply.
+                          // That must never terminate the authoritative daemon.
+                          let _ = stream.write_all(response.as_bytes());''')
+
+          old_terminal = '''fn terminal_size() -> (usize, usize) {
+              if let Ok(out) = Command::new("stty").arg("size").output() {
+                  if out.status.success() {
+                      if let Ok(s) = String::from_utf8(out.stdout) {
+                          let mut parts = s.split_whitespace();
+                          if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+                              if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                                  return (rows, cols);
+                              }
+                          }
+                      }
+                  }
+              }
+              (40, 100)
+          }'''
+
+          new_terminal = '''fn terminal_size() -> (usize, usize) {
+              let env_rows = env::var("LINES").ok().and_then(|v| v.parse::<usize>().ok());
+              let env_cols = env::var("COLUMNS").ok().and_then(|v| v.parse::<usize>().ok());
+              if let (Some(rows), Some(cols)) = (env_rows, env_cols) {
+                  if rows > 0 && cols > 0 {
+                      return (rows, cols);
+                  }
+              }
+
+              let tput_lines = Command::new("tput")
+                  .arg("lines")
+                  .output()
+                  .ok()
+                  .filter(|o| o.status.success())
+                  .and_then(|o| String::from_utf8(o.stdout).ok())
+                  .and_then(|s| s.trim().parse::<usize>().ok());
+              let tput_cols = Command::new("tput")
+                  .arg("cols")
+                  .output()
+                  .ok()
+                  .filter(|o| o.status.success())
+                  .and_then(|o| String::from_utf8(o.stdout).ok())
+                  .and_then(|s| s.trim().parse::<usize>().ok());
+              if let (Some(rows), Some(cols)) = (tput_lines, tput_cols) {
+                  if rows > 0 && cols > 0 {
+                      return (rows, cols);
+                  }
+              }
+
+              if let Ok(out) = Command::new("stty").args(["-F", "/dev/tty", "size"]).output() {
+                  if out.status.success() {
+                      if let Ok(s) = String::from_utf8(out.stdout) {
+                          let mut parts = s.split_whitespace();
+                          if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+                              if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                                  if rows > 0 && cols > 0 {
+                                      return (rows, cols);
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              if let Ok(out) = Command::new("stty").arg("size").output() {
+                  if out.status.success() {
+                      if let Ok(s) = String::from_utf8(out.stdout) {
+                          let mut parts = s.split_whitespace();
+                          if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+                              if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                                  if rows > 0 && cols > 0 {
+                                      return (rows, cols);
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              (40, 100)
+          }'''
+          if old_terminal not in s:
+              raise SystemExit('terminal_size block not found')
+          s = s.replace(old_terminal, new_terminal)
+
+          old_start = '''fn start_daemon() -> io::Result<()> {
+              ensure_dirs()?;
+              if daemon_running() {
+                  println!("bonzai is already growing");
+                  return Ok(());
+              }
+              if !state_path().exists() {
+                  save_state(&State::new())?;
+              }
+              let exe = env::current_exe()?;
+              Command::new(exe)
+                  .arg("daemon-run")
+                  .stdin(Stdio::null())
+                  .stdout(Stdio::null())
+                  .stderr(Stdio::null())
+                  .spawn()?;
+              for _ in 0..20 {
+                  thread::sleep(Duration::from_millis(50));
+                  if daemon_running() {
+                      println!("bonzai started");
+                      return Ok(());
+                  }
+              }
+              Err(io::Error::other("daemon failed to start"))
+          }'''
+
+          new_start = '''fn start_daemon() -> io::Result<()> {
+              ensure_dirs()?;
+              if daemon_running() {
+                  println!("bonzai is already growing");
+                  return Ok(());
+              }
+
+              // Clean up stale runtime files left by an interrupted or upgraded daemon.
+              let _ = fs::remove_file(socket_path());
+              let _ = fs::remove_file(pid_path());
+
+              if !state_path().exists() {
+                  save_state(&State::new())?;
+              }
+              let exe = env::current_exe()?;
+              Command::new(exe)
+                  .arg("daemon-run")
+                  .stdin(Stdio::null())
+                  .stdout(Stdio::null())
+                  .stderr(Stdio::null())
+                  .spawn()?;
+              for _ in 0..40 {
+                  thread::sleep(Duration::from_millis(50));
+                  if daemon_running() {
+                      println!("bonzai started");
+                      return Ok(());
+                  }
+              }
+              Err(io::Error::other("daemon failed to start; try `bonzai daemon-run` for diagnostics"))
+          }
+
+          fn self_update() -> io::Result<()> {
+              const INSTALL_URL: &str = "https://raw.githubusercontent.com/Nicolas25vlad/bonzai/main/install.sh";
+              let was_running = daemon_running();
+              if was_running {
+                  let _ = send("stop");
+                  thread::sleep(Duration::from_millis(180));
+              }
+
+              println!("checking for the latest bonzai...");
+              let download = Command::new("curl")
+                  .args(["-fsSL", INSTALL_URL])
+                  .output()?;
+              if !download.status.success() {
+                  return Err(io::Error::other("failed to download the installer"));
+              }
+
+              let mut child = Command::new("bash")
+                  .stdin(Stdio::piped())
+                  .spawn()?;
+              if let Some(stdin) = child.stdin.as_mut() {
+                  stdin.write_all(&download.stdout)?;
+              }
+              let status = child.wait()?;
+              if !status.success() {
+                  return Err(io::Error::other("update failed while building the new version"));
+              }
+
+              if was_running {
+                  let exe = env::current_exe()?;
+                  let status = Command::new(exe).arg("start").status()?;
+                  if !status.success() {
+                      return Err(io::Error::other("updated successfully, but the daemon could not restart"));
+                  }
+              }
+
+              println!("bonzai is up to date");
+              Ok(())
+          }'''
+          if old_start not in s:
+              raise SystemExit('start_daemon block not found')
+          s = s.replace(old_start, new_start)
+
+          s = s.replace(
+          '''        "watch" => {
+                      if !daemon_running() {
+                          let _ = start_daemon();
+                      }
+                      watch()
+                  }''',
+          '''        "watch" => {
+                      if !daemon_running() {
+                          start_daemon()?;
+                      }
+                      watch()
+                  }''')
+
+          s = s.replace(
+          '''        "version" | "--version" | "-V" => {
+                      println!("bonzai {VERSION}");
+                      Ok(())
+                  }''',
+          '''        "update" => self_update(),
+                  "version" | "--version" | "-V" => {
+                      println!("bonzai {VERSION}");
+                      Ok(())
+                  }''')
+
+          s = s.replace(
+          '''{TITLE}INFO{RESET}\\
+            help, -h, --help         Show this help\\
+            version, -V, --version   Print the version\\''',
+          '''{TITLE}INFO{RESET}\\
+            update                   Download, build and install the latest version\\
+            help, -h, --help         Show this help\\
+            version, -V, --version   Print the version\\''')
+
+          p.write_text(s)
+
+          cargo = Path('Cargo.toml')
+          cargo.write_text(cargo.read_text().replace('version = "0.2.1"', 'version = "0.2.2"', 1))
+          lock = Path('Cargo.lock')
+          lock.write_text(lock.read_text().replace('version = "0.2.1"', 'version = "0.2.2"', 1))
+          PY
+
+      - name: Format and validate
+        run: |
+          cargo fmt --check || cargo fmt
+          cargo check --locked
+          cargo test --locked
+          cargo build --release --locked
+
+      - name: Commit hotfix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.rs Cargo.toml Cargo.lock
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: stabilize daemon, centering and self-update"
+          git push
