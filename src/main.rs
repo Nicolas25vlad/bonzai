@@ -5,16 +5,13 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::OnceLock,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.5";
+const VERSION: &str = "0.2.6";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
-
-static TERMINAL_SIZE: OnceLock<(usize, usize)> = OnceLock::new();
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
@@ -425,9 +422,11 @@ enum BranchKind {
 }
 
 fn draw_str(c: &mut Canvas, x: i32, y: i32, text: &str, kind: u8) {
+    let width = text.chars().count() as i32;
+    let start_x = x - width / 2;
     for (i, ch) in text.chars().enumerate() {
         if ch != ' ' {
-            c.set(x + i as i32, y, ch, kind);
+            c.set(start_x + i as i32, y, ch, kind);
         }
     }
 }
@@ -763,7 +762,7 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
 
     // Wide, quiet planter inspired by cbonsai's classic terminal silhouette.
     let pot = [
-        ("      .-----------------.      ", 2u8),
+        ("      .-----------------.      ", 7u8),
         (r"       \               /       ", 7u8),
         (r"        \_____________/        ", 7u8),
         ("        (_)         (_)        ", 7u8),
@@ -846,7 +845,10 @@ fn mood(st: &State) -> &'static str {
 }
 
 fn terminal_size() -> (usize, usize) {
-    *TERMINAL_SIZE.get_or_init(detect_terminal_size)
+    // The watch view lives for a long time, so terminal geometry cannot be cached.
+    // Re-detecting here lets the layout recover after a resize instead of keeping
+    // stale dimensions for the lifetime of the process.
+    detect_terminal_size()
 }
 
 fn detect_terminal_size() -> (usize, usize) {
@@ -941,14 +943,53 @@ fn center_line(line: &str, cols: usize) -> String {
     format!("{}{}", " ".repeat(pad), line)
 }
 
-fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
-    let w = 68;
-    let h = 28;
+fn compact_scene(st: &State, rows: usize, cols: usize) -> String {
+    let lines = [
+        format!("{TITLE}bonzai{RESET}"),
+        format!("{MUTED}{}{RESET}", mood(st)),
+        String::new(),
+        format!("{DIM}terminal too small{RESET}"),
+        format!("{DIM}resize to at least 36 x 18{RESET}"),
+        String::new(),
+        format!(
+            "{WATER}water{RESET} {:>3.0}%  {SUN}light{RESET} {:>3.0}%",
+            st.water, st.light
+        ),
+        format!("{HEALTH}health{RESET} {:>3.0}%", st.health),
+        format!("{DIM}[q] leave  [?] help{RESET}"),
+    ];
+
+    let top_pad = rows.saturating_sub(lines.len()) / 2;
+    let mut out = String::new();
+    out.push_str(&"\n".repeat(top_pad));
+    for line in lines {
+        out.push_str(&center_line(&line, cols));
+        out.push('\n');
+    }
+    out
+}
+
+fn render_scene_for_size(
+    st: &State,
+    effect: Option<SceneEffect>,
+    rows: usize,
+    cols: usize,
+) -> String {
+    if rows < 18 || cols < 36 {
+        return compact_scene(st, rows, cols);
+    }
+
+    let narrow = cols < 80;
+    let split_controls = cols < 68;
+    let footer_lines = if narrow { 3 } else { 1 } + if split_controls { 2 } else { 1 };
+    let overhead = 2 + footer_lines;
+    let h = rows.saturating_sub(overhead).clamp(10, 28) as i32;
+    let w = cols.saturating_sub(2).clamp(30, 68) as i32;
+
     let mut c = grow_tree(st, w, h);
     if let Some(effect) = effect {
         apply_effect(&mut c, effect);
     }
-    let (rows, cols) = terminal_size();
 
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!("{TITLE}bonzai{RESET}  {MUTED}{}{RESET}", mood(st)));
@@ -987,15 +1028,40 @@ fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
         1 => "→",
         _ => "↑",
     };
-    lines.push(format!(
-        "{WATER}water{RESET} {} {:>3.0}%   {SUN}light{RESET} {} {:>3.0}% {dir}   {HEALTH}health{RESET} {} {:>3.0}%",
-        bar(st.water, 10), st.water,
-        bar(st.light, 10), st.light,
-        bar(st.health, 10), st.health,
-    ));
-    lines.push(format!(
-        "{DIM}[w/r] water   [a/s/d] light   [j/k/l] prune   [h/?] help   [q] leave{RESET}"
-    ));
+
+    if narrow {
+        lines.push(format!(
+            "{WATER}water{RESET}  {} {:>3.0}%   {SUN}light{RESET}  {} {:>3.0}% {dir}",
+            bar(st.water, 8),
+            st.water,
+            bar(st.light, 8),
+            st.light,
+        ));
+        lines.push(format!(
+            "{HEALTH}health{RESET} {} {:>3.0}%",
+            bar(st.health, 10),
+            st.health,
+        ));
+        lines.push(String::new());
+    } else {
+        lines.push(format!(
+            "{WATER}water{RESET} {} {:>3.0}%   {SUN}light{RESET} {} {:>3.0}% {dir}   {HEALTH}health{RESET} {} {:>3.0}%",
+            bar(st.water, 10), st.water,
+            bar(st.light, 10), st.light,
+            bar(st.health, 10), st.health,
+        ));
+    }
+
+    if split_controls {
+        lines.push(format!(
+            "{DIM}[w/r] water   [a/s/d] light   [h/?] help{RESET}"
+        ));
+        lines.push(format!("{DIM}[j/k/l] prune   [q] leave{RESET}"));
+    } else {
+        lines.push(format!(
+            "{DIM}[w/r] water   [a/s/d] light   [j/k/l] prune   [h/?] help   [q] leave{RESET}"
+        ));
+    }
 
     let top_pad = rows.saturating_sub(lines.len()) / 2;
     let mut out = String::new();
@@ -1007,19 +1073,35 @@ fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
     out
 }
 
+fn render_scene(st: &State, effect: Option<SceneEffect>) -> String {
+    let (rows, cols) = terminal_size();
+    render_scene_for_size(st, effect, rows, cols)
+}
+
 fn render(st: &State) -> String {
     render_scene(st, None)
 }
 
-fn paint_frame(frame: &str) -> io::Result<()> {
-    let mut out = String::with_capacity(frame.len() + 256);
+fn frame_escape(frame: &str) -> String {
+    let lines: Vec<&str> = frame.lines().collect();
+    let mut out = String::with_capacity(frame.len() + lines.len() * 8 + 16);
     out.push_str("\x1b[H");
-    for line in frame.lines() {
+
+    for (index, line) in lines.iter().enumerate() {
+        out.push_str("\x1b[2K\r");
         out.push_str(line);
-        out.push_str("\x1b[K\n");
+        if index + 1 < lines.len() {
+            // Cursor Next Line avoids writing a literal newline on the bottom row,
+            // which can scroll the alternate screen and make the whole tree jump.
+            out.push_str("\x1b[E");
+        }
     }
     out.push_str("\x1b[J");
+    out
+}
 
+fn paint_frame(frame: &str) -> io::Result<()> {
+    let out = frame_escape(frame);
     let mut stdout = io::stdout();
     stdout.write_all(out.as_bytes())?;
     stdout.flush()
@@ -1044,11 +1126,17 @@ fn get_snapshot() -> State {
 }
 
 fn animate_water(st: &State) -> io::Result<()> {
+    let (rows, cols) = terminal_size();
     for frame in 0..3 {
-        paint_frame(&render_scene(st, Some(SceneEffect::Water(frame))))?;
+        paint_frame(&render_scene_for_size(
+            st,
+            Some(SceneEffect::Water(frame)),
+            rows,
+            cols,
+        ))?;
         thread::sleep(Duration::from_millis(65));
     }
-    paint_frame(&render(st))
+    paint_frame(&render_scene_for_size(st, None, rows, cols))
 }
 
 fn animate_light(direction: &str, st: &State) -> io::Result<()> {
@@ -1057,11 +1145,17 @@ fn animate_light(direction: &str, st: &State) -> io::Result<()> {
         "right" => 1,
         _ => 0,
     };
+    let (rows, cols) = terminal_size();
     for frame in 0..2 {
-        paint_frame(&render_scene(st, Some(SceneEffect::Light(dir, frame))))?;
+        paint_frame(&render_scene_for_size(
+            st,
+            Some(SceneEffect::Light(dir, frame)),
+            rows,
+            cols,
+        ))?;
         thread::sleep(Duration::from_millis(75));
     }
-    paint_frame(&render(st))
+    paint_frame(&render_scene_for_size(st, None, rows, cols))
 }
 
 fn animate_prune(side: &str, st: &State) -> io::Result<()> {
@@ -1070,16 +1164,22 @@ fn animate_prune(side: &str, st: &State) -> io::Result<()> {
         "right" => 1,
         _ => 0,
     };
+    let (rows, cols) = terminal_size();
     for frame in 0..2 {
-        paint_frame(&render_scene(st, Some(SceneEffect::Prune(side, frame))))?;
+        paint_frame(&render_scene_for_size(
+            st,
+            Some(SceneEffect::Prune(side, frame)),
+            rows,
+            cols,
+        ))?;
         thread::sleep(Duration::from_millis(70));
     }
-    paint_frame(&render(st))
+    paint_frame(&render_scene_for_size(st, None, rows, cols))
 }
 
 fn watch_help() -> String {
-    let (_, cols) = terminal_size();
-    let lines = [
+    let (rows, cols) = terminal_size();
+    let mut lines = vec![
         format!("{TITLE}bonzai controls{RESET}"),
         String::new(),
         format!("{WATER}w / r{RESET}   water"),
@@ -1088,14 +1188,20 @@ fn watch_help() -> String {
         format!("{TITLE}h / ?{RESET}   help"),
         format!("{TITLE}q{RESET}   leave"),
         String::new(),
-        format!("{MUTED}Actions have a short cooldown so one held key cannot flood the tree.{RESET}"),
-        format!("{MUTED}Light history affects future growth. Water and pruning affect vigor and structure.{RESET}"),
-        String::new(),
-        format!("{DIM}press any key to return{RESET}"),
     ];
 
+    if cols >= 58 {
+        lines.push(format!(
+            "{MUTED}held keys are rate-limited to protect the tree{RESET}"
+        ));
+        lines.push(format!(
+            "{MUTED}light direction is remembered by future growth{RESET}"
+        ));
+        lines.push(String::new());
+    }
+    lines.push(format!("{DIM}press any key to return{RESET}"));
+
     let mut out = String::new();
-    let (rows, _) = terminal_size();
     out.push_str(&"\n".repeat(rows.saturating_sub(lines.len()) / 2));
     for line in lines {
         out.push_str(&center_line(&line, cols));

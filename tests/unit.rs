@@ -162,5 +162,52 @@ mod app {
             assert!(centered.starts_with("  "));
             assert_eq!(visible_width(&centered), 8);
         }
+
+        #[test]
+        fn branch_glyphs_are_centered_on_the_walker_position() {
+            let mut canvas = Canvas::new(9, 3);
+            draw_str(&mut canvas, 4, 1, "/|\\", 1);
+
+            assert_eq!(canvas.get(3, 1).ch, '/');
+            assert_eq!(canvas.get(4, 1).ch, '|');
+            assert_eq!(canvas.get(5, 1).ch, '\\');
+            assert_eq!(canvas.get(6, 1).ch, ' ');
+        }
+
+        #[test]
+        fn responsive_renderer_stays_inside_requested_viewport() {
+            let st = stable_state();
+            for (rows, cols) in [(24usize, 52usize), (40, 100)] {
+                let frame = render_scene_for_size(&st, None, rows, cols);
+                let rendered: Vec<&str> = frame.lines().collect();
+                assert!(rendered.len() <= rows, "frame exceeded {rows} rows");
+                for line in rendered {
+                    assert!(
+                        visible_width(line) <= cols,
+                        "line width {} exceeded {cols} columns",
+                        visible_width(line)
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn tiny_terminal_falls_back_without_wrapping() {
+            let st = stable_state();
+            let frame = render_scene_for_size(&st, None, 14, 30);
+            let rendered: Vec<&str> = frame.lines().collect();
+            assert!(rendered.len() <= 14);
+            assert!(rendered.iter().all(|line| visible_width(line) <= 30));
+            assert!(frame.contains("terminal too small"));
+        }
+
+        #[test]
+        fn frame_painter_never_emits_literal_newlines_or_full_clears() {
+            let painted = frame_escape("alpha\nbeta\n");
+            assert!(!painted.contains('\n'));
+            assert!(!painted.contains("\x1b[2J"));
+            assert!(painted.contains("\x1b[E"));
+            assert!(painted.ends_with("\x1b[J"));
+        }
     }
 }
