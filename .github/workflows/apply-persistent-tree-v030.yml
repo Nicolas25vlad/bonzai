@@ -29,6 +29,7 @@ jobs:
       - name: Normalize generated code
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           main = Path('src/main.rs')
@@ -38,22 +39,12 @@ jobs:
               '#[allow(dead_code)]\nfn is_tree_cell(cell: Cell) -> bool {',
               1,
           )
-          old = '''        let side = if parent.side == 0 {
-              if shape_bias > 0.18 && rng.chance(68, 100) {
-                  1
-              } else if shape_bias < -0.18 && rng.chance(68, 100) {
-                  -1
-              } else if rng.chance(1, 2) {
-                  -1
-              } else {
-                  1
-              }
-          } else if rng.chance(72, 100) {
-              parent.side
-          } else {
-              -parent.side
-          };'''
-          new = '''        let random_side = if rng.chance(1, 2) { -1 } else { 1 };
+
+          pattern = re.compile(
+              r'        let side = if parent\.side == 0 \{.*?        \};\n        let light_pull',
+              re.S,
+          )
+          replacement = '''        let random_side = if rng.chance(1, 2) { -1 } else { 1 };
           let side = if parent.side == 0 {
               if shape_bias > 0.18 && rng.chance(68, 100) {
                   1
@@ -66,10 +57,12 @@ jobs:
               parent.side
           } else {
               -parent.side
-          };'''
-          if old not in s:
-              raise SystemExit('side selection block not found')
-          main.write_text(s.replace(old, new, 1))
+          };
+          let light_pull'''
+          s, count = pattern.subn(replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'side selection replacement count: {count}')
+          main.write_text(s)
 
           tests = Path('tests/unit.rs')
           t = tests.read_text()
