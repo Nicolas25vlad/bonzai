@@ -1,0 +1,17 @@
+[package]
+name = "bonzai"
+version = "0.1.0"
+edition = "2021"
+description = "A tiny persistent bonsai that lives in your terminal"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Nicolas25vlad/bonzai"
+readme = "README.md"
+keywords = ["terminal", "bonsai", "cli", "tui", "procedural"]
+categories = ["command-line-utilities"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
