@@ -9,9 +9,10 @@ mod app {
 
         fn stable_state() -> State {
             let mut st = State::new();
+            let now = now_secs();
             st.seed = 0xB0_5A_1;
-            st.born_at = 1_000;
-            st.last_tick = 1_000;
+            st.born_at = now.saturating_sub(1_000);
+            st.last_tick = now;
             st.water = 72.0;
             st.light = 68.0;
             st.health = 94.0;
@@ -72,6 +73,9 @@ mod app {
         #[test]
         fn one_hour_of_simulation_keeps_core_values_bounded() {
             let mut st = stable_state();
+            st.last_tick = 1_000;
+            st.water = 72.0;
+            st.light = 68.0;
             st.advance_to(4_600);
 
             assert!(st.water < 72.0);
