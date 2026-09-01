@@ -190,7 +190,7 @@ insert = r'''
             for y in foliage_floor..canvas.h {
                 for x in 0..canvas.w {
                     assert!(
-                        !matches!(canvas.get(x, y).kind, 2 | 3 | 4),
+                        !matches!(canvas.get(x, y).kind, 2..=4),
                         "foliage leaked into planter buffer at ({x}, {y})"
                     );
                 }
@@ -207,7 +207,7 @@ insert = r'''
                 for x in (canvas.w / 2 - 12)..=(canvas.w / 2 + 12) {
                     let cell = canvas.get(x, y);
                     assert!(
-                        !matches!(cell.kind, 1 | 2 | 3 | 4 | 5),
+                        !matches!(cell.kind, 1..=5),
                         "tree cell visible through planter at ({x}, {y})"
                     );
                 }
