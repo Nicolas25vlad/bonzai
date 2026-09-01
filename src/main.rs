@@ -408,65 +408,59 @@ fn draw_branch(
     rng: &mut Rng,
     mut x: i32,
     mut y: i32,
-    mut dx: i32,
-    length: i32,
+    mut dir: i32,
+    mut life: i32,
     depth: u8,
     tropism: f32,
     vigor: f32,
     prune_left: u32,
     prune_right: u32,
 ) {
-    if depth > 4 || length < 2 {
-        return;
-    }
-
-    let light_step = if tropism > 0.22 {
-        1
-    } else if tropism < -0.22 {
-        -1
-    } else {
-        0
-    };
-
-    for step in 0..length {
-        y -= 1;
-        let drift_chance = if depth == 0 { 28 } else { 44 };
-        if rng.chance(drift_chance, 100) {
-            let jitter = rng.range(-1, 2);
-            dx = (dx + jitter + if rng.chance(26, 100) { light_step } else { 0 }).clamp(-1, 1);
-        }
-        if dx != 0 && rng.chance(54, 100) {
-            x += dx;
-        }
-
-        let glyph = match dx {
-            -1 => '/',
-            1 => '\\',
-            _ => if depth == 0 && step < 4 { '┃' } else { '│' },
+    while life > 0 && y > 2 {
+        let photo_step = if tropism > 0.35 {
+            1
+        } else if tropism < -0.35 {
+            -1
+        } else {
+            0
         };
-        c.set(x, y, glyph, if depth == 0 && step < 4 { 5 } else { 1 });
 
-        let branch_window = step > 2 && step < length - 2;
-        let branch_chance = ((9.0 + depth as f32 * 2.0) * vigor).clamp(3.0, 18.0) as u64;
-        if branch_window && depth < 3 && rng.chance(branch_chance, 100) {
-            let preferred = if light_step != 0 && rng.chance(60, 100) {
-                light_step
-            } else if rng.chance(1, 2) {
-                -1
-            } else {
-                1
-            };
-            let suppressed = (preferred < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 11))
-                || (preferred > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 11));
-            if !suppressed {
-                let child_len = ((length - step) / 2 + rng.range(2, 6)).max(3);
+        if depth == 0 && rng.chance(30, 100) {
+            dir += photo_step;
+        } else if depth > 0 && rng.chance(18, 100) {
+            dir += photo_step;
+        }
+
+        if rng.chance(38, 100) {
+            x += dir.signum();
+        }
+        y -= 1;
+
+        let (glyph, kind) = if depth == 0 {
+            if life > 7 { ('┃', 5) } else { ('│', 1) }
+        } else if dir < 0 {
+            ('╱', 1)
+        } else if dir > 0 {
+            ('╲', 1)
+        } else {
+            ('│', 1)
+        };
+        c.set(x, y, glyph, kind);
+
+        let branch_chance = ((10.0 + life as f32 * 0.6) * vigor).clamp(3.0, 22.0) as u64;
+        if life > 5 && depth < 3 && rng.chance(branch_chance, 100) {
+            let branch_dir = if rng.chance(1, 2) { -1 } else { 1 };
+            let pruned = (branch_dir < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 10))
+                || (branch_dir > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
+
+            if !pruned {
                 draw_branch(
                     c,
                     rng,
                     x,
                     y,
-                    preferred,
-                    child_len,
+                    branch_dir,
+                    (life / 2 + rng.range(1, 4)).max(3),
                     depth + 1,
                     tropism,
                     vigor,
@@ -475,27 +469,29 @@ fn draw_branch(
                 );
             }
         }
-    }
 
-    if depth > 0 {
-        draw_leaf_cluster(c, rng, x, y, tropism, vigor, depth);
+        if depth > 0 && life <= 3 {
+            draw_leaf_cluster(c, rng, x, y, tropism, vigor, depth);
+        }
+
+        life -= 1;
     }
 }
 
 fn draw_leaf_cluster(
     c: &mut Canvas,
     rng: &mut Rng,
-    x: i32,
-    y: i32,
+    cx: i32,
+    cy: i32,
     tropism: f32,
     vigor: f32,
     depth: u8,
 ) {
-    let radius_x = (2 + (vigor * 3.0) as i32 - (depth as i32 / 2)).clamp(2, 5);
+    let radius_x = (2 + depth as i32 + (vigor * 2.0) as i32).clamp(2, 5);
     let radius_y = (1 + (vigor * 2.0) as i32).clamp(1, 3);
-    let shift = if tropism > 0.18 {
+    let shift = if tropism > 0.15 {
         1
-    } else if tropism < -0.18 {
+    } else if tropism < -0.15 {
         -1
     } else {
         0
@@ -503,26 +499,20 @@ fn draw_leaf_cluster(
 
     for yy in -radius_y..=radius_y {
         for xx in -radius_x..=radius_x {
-            let ellipse = (xx * xx * 4) + (yy * yy * 9);
-            let limit = radius_x * radius_x * 4;
-            if ellipse > limit || !rng.chance((55.0 + vigor * 25.0) as u64, 100) {
-                continue;
+            let nx = xx as f32 / radius_x as f32;
+            let ny = yy as f32 / radius_y.max(1) as f32;
+            if nx * nx + ny * ny <= 1.0 && rng.chance((62.0 + vigor * 28.0) as u64, 100) {
+                let x = cx + xx + if rng.chance(45, 100) { shift } else { 0 };
+                let y = cy + yy;
+                let roll = rng.next() % 8;
+                let (ch, kind) = match roll {
+                    0 => ('✦', 3),
+                    1 | 2 => ('●', 2),
+                    3 | 4 => ('●', 4),
+                    _ => ('•', 2),
+                };
+                c.set(x, y, ch, kind);
             }
-            let px = x + xx + if rng.chance(58, 100) { shift } else { 0 };
-            let py = y + yy;
-            let glyph = match rng.next() % 7 {
-                0 => '❧',
-                1 => '•',
-                2 => '·',
-                3 => '✦',
-                _ => '●',
-            };
-            let kind = match rng.next() % 6 {
-                0 => 4,
-                1 => 6,
-                _ => 2,
-            };
-            c.set(px, py, glyph, kind);
         }
     }
 }
@@ -535,14 +525,14 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
 
     let photo = st.photo_bias();
     let current_light_bias = st.light_dir as f32 * (st.light / 100.0) * 0.28;
-    let tropism = (photo * 1.35 + current_light_bias).clamp(-1.4, 1.4);
+    let tropism = (photo * 1.3 + current_light_bias).clamp(-1.4, 1.4);
+    let stress = ((st.drought_stress + st.wet_stress) / 75.0).clamp(0.0, 0.72);
+    let vigor = ((st.health / 100.0) * (1.0 - stress)).clamp(0.12, 1.0);
     let light_quality = (st.light / 100.0).clamp(0.0, 1.0);
-    let stress = ((st.drought_stress + st.wet_stress) / 80.0).clamp(0.0, 0.72);
-    let vigor = ((st.health / 100.0) * (1.0 - stress) * (0.70 + light_quality * 0.30))
-        .clamp(0.15, 1.0);
-    let etiolation = (1.0 - light_quality) * 0.55;
-    let max_steps = 9 + (st.growth / 100.0 * 18.0) as i32 + (etiolation * 5.0) as i32;
-    let top_penalty = st.prune_top.min(7) as i32;
+    let etiolation = (1.0 - light_quality) * 0.65;
+
+    let max_steps = 9 + (st.growth / 100.0 * 18.0) as i32 + (etiolation * 4.0) as i32;
+    let top_penalty = (st.prune_top.min(7) as i32) * 2;
     let trunk_steps = (max_steps - top_penalty).max(8);
 
     draw_branch(
@@ -563,11 +553,12 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     let crown_shift = (tropism * 2.0).round() as i32;
     for offset in [-5, 0, 5] {
         if rng.chance((62.0 * vigor + 22.0) as u64, 100) {
+            let crown_jitter = rng.range(-1, 3);
             draw_leaf_cluster(
                 &mut c,
                 &mut rng,
                 base_x + offset + crown_shift,
-                crown_y + rng.range(-1, 3),
+                crown_y + crown_jitter,
                 tropism,
                 vigor,
                 1,
@@ -576,24 +567,18 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     }
 
     let pot = [
-        "      ╭──────╮      ",
-        "     ╱        ╲     ",
-        "    ╱  ░░░░░░  ╲    ",
-        "    ╰──────────╯    ",
-        "      ╰──────╯      ",
+        "     ╭────────╮     ",
+        "    ╱          ╲    ",
+        "   ╱   ░░░░░░   ╲   ",
+        "   ╰────────────╯   ",
+        "     ╰────────╯     ",
     ];
     for (i, row) in pot.iter().enumerate() {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
-            if ch == ' ' {
-                continue;
+            if ch != ' ' {
+                c.set(sx + j as i32, base_y + i as i32, ch, if ch == '░' { 6 } else { 7 });
             }
-            c.set(
-                sx + j as i32,
-                base_y + 1 + i as i32,
-                ch,
-                if ch == '░' { 7 } else { 3 },
-            );
         }
     }
 
@@ -611,7 +596,7 @@ fn mood(st: &State) -> &'static str {
     } else if st.water < 20.0 {
         "thirsty"
     } else if st.light < 22.0 {
-        "reaching for light"
+        "searching for light"
     } else if st.health < 45.0 {
         "recovering"
     } else {
@@ -620,134 +605,121 @@ fn mood(st: &State) -> &'static str {
 }
 
 fn terminal_size() -> (usize, usize) {
-    if let Ok(output) = Command::new("stty").arg("size").output() {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let mut parts = text.split_whitespace();
-            if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
-                if let (Ok(r), Ok(c)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
-                    return (c.max(40), r.max(20));
+    if let Ok(out) = Command::new("stty").arg("size").output() {
+        if out.status.success() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                let mut parts = s.split_whitespace();
+                if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+                    if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                        return (rows, cols);
+                    }
                 }
             }
         }
     }
-    (80, 40)
+    (40, 100)
 }
 
-fn ansi_visible_width(s: &str) -> usize {
-    let mut width = 0usize;
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            i += 1;
-            if i < bytes.len() && bytes[i] == b'[' {
-                i += 1;
-                while i < bytes.len() && !(bytes[i] >= 0x40 && bytes[i] <= 0x7e) {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
+fn visible_width(s: &str) -> usize {
+    let mut width = 0;
+    let mut in_escape = false;
+    for ch in s.chars() {
+        if ch == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            if ch == 'm' {
+                in_escape = false;
             }
             continue;
         }
-        if let Some(ch) = s[i..].chars().next() {
-            width += 1;
-            i += ch.len_utf8();
-        } else {
-            break;
-        }
+        width += 1;
     }
     width
 }
 
-fn centered_line(s: &str, cols: usize) -> String {
-    let width = ansi_visible_width(s);
+fn center_line(line: &str, cols: usize) -> String {
+    let width = visible_width(line);
     let pad = cols.saturating_sub(width) / 2;
-    format!("{}{}", " ".repeat(pad), s)
+    format!("{}{}", " ".repeat(pad), line)
 }
 
-fn tree_lines(st: &State) -> Vec<String> {
-    let c = grow_tree(st, 54, 26);
-    let mut lines = Vec::new();
-    for y in 0..c.h {
+fn render(st: &State) -> String {
+    let w = 58;
+    let h = 25;
+    let c = grow_tree(st, w, h);
+    let (rows, cols) = terminal_size();
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("{TITLE}bonzai{RESET}"));
+    lines.push(format!("{MUTED}{}{RESET}", mood(st)));
+    lines.push(String::new());
+
+    for y in 0..h {
         let mut line = String::new();
-        for x in 0..c.w {
+        for x in 0..w {
             let cell = c.get(x, y);
-            if cell.kind == 0 {
-                line.push(' ');
-                continue;
-            }
             let color = match cell.kind {
                 1 => TRUNK,
                 2 => LEAF,
-                3 => POT,
-                4 => LEAF_BRIGHT,
+                3 => LEAF_BRIGHT,
+                4 => LEAF_DARK,
                 5 => TRUNK_DARK,
-                6 => LEAF_DARK,
-                7 => SOIL,
+                6 => SOIL,
+                7 => POT,
                 _ => "",
             };
-            line.push_str(color);
-            line.push(cell.ch);
-            line.push_str(RESET);
+            if cell.kind == 0 {
+                line.push(' ');
+            } else {
+                line.push_str(color);
+                line.push(cell.ch);
+                line.push_str(RESET);
+            }
         }
-        lines.push(line.trim_end().to_string());
+        lines.push(line);
     }
-    while lines.first().is_some_and(|l| l.trim().is_empty()) {
-        lines.remove(0);
-    }
-    lines
-}
-
-fn render(st: &State, notice: Option<&str>) -> String {
-    let (cols, rows) = terminal_size();
-    let mut content = Vec::<String>::new();
-    content.push(format!("{TITLE}bonzai{RESET}  {DIM}·  a quiet place to grow{RESET}"));
-    content.push(format!("{MUTED}{}{RESET}", mood(st)));
-    content.push(String::new());
-    content.extend(tree_lines(st));
-    content.push(String::new());
 
     let dir = match st.light_dir {
         -1 => "←",
         1 => "→",
         _ => "↑",
     };
-    content.push(format!(
-        "{TITLE}age{RESET} {}    {TITLE}growth{RESET} {:>5.1}%    {TITLE}light memory{RESET} {:>5.1}h",
+
+    lines.push(String::new());
+    lines.push(format!(
+        "{TITLE}age{RESET} {}   {TITLE}growth{RESET} {:>5.1}%   {TITLE}light memory{RESET} {:>5.1}h",
         human_age(st.age_secs()),
         st.growth,
         st.total_light_hours()
     ));
-    content.push(format!(
-        "{WATER}water{RESET}  {} {:>5.1}%    {SUN}light{RESET} {} {:>5.1}% {dir}",
+    lines.push(format!(
+        "{WATER}water{RESET}  {} {:>5.1}%   {SUN}light{RESET}  {} {:>5.1}% {dir}",
         bar(st.water, 12),
         st.water,
         bar(st.light, 12),
         st.light,
     ));
-    content.push(format!(
+    lines.push(format!(
         "{HEALTH}health{RESET} {} {:>5.1}%",
         bar(st.health, 12),
-        st.health
+        st.health,
     ));
-    content.push(String::new());
-    content.push(format!(
+    lines.push(String::new());
+    lines.push(format!(
         "{DIM}[w/r]{RESET} water   {DIM}[a/s/d]{RESET} light   {DIM}[j/k/l]{RESET} prune   {DIM}[h/?]{RESET} help   {DIM}[q]{RESET} leave"
     ));
-    if let Some(msg) = notice {
-        content.push(format!("{MUTED}{msg}{RESET}"));
-    } else {
-        content.push(format!("{MUTED}Your tree keeps growing while you code.{RESET}"));
-    }
+    lines.push(format!(
+        "{MUTED}Take a quiet minute. The tree will wait.{RESET}"
+    ));
 
-    let top_pad = rows.saturating_sub(content.len()) / 2;
-    let mut out = String::from("\x1b[?25l\x1b[2J\x1b[H");
+    let top_pad = rows.saturating_sub(lines.len()) / 2;
+    let mut out = String::new();
+    out.push_str("\x1b[?25l\x1b[2J\x1b[H");
     out.push_str(&"\n".repeat(top_pad));
-    for line in content {
-        out.push_str(&centered_line(&line, cols));
+    for line in lines {
+        out.push_str(&center_line(&line, cols));
         out.push('\n');
     }
     out
@@ -771,53 +743,102 @@ fn get_snapshot() -> State {
     }
 }
 
-fn show_frame(st: &State, notice: Option<&str>, delay_ms: u64) -> io::Result<()> {
-    print!("{}", render(st, notice));
-    io::stdout().flush()?;
-    thread::sleep(Duration::from_millis(delay_ms));
-    Ok(())
+fn centered_overlay(lines: &[String]) -> String {
+    let (rows, cols) = terminal_size();
+    let top = rows.saturating_sub(lines.len()) / 2;
+    let mut out = String::new();
+    out.push_str("\x1b[?25l\x1b[2J\x1b[H");
+    out.push_str(&"\n".repeat(top));
+    for line in lines {
+        out.push_str(&center_line(line, cols));
+        out.push('\n');
+    }
+    out
 }
 
 fn animate_water(st: &State) -> io::Result<()> {
-    for (msg, delay) in [
-        ("       ·     ·        ", 90),
-        ("     ·   · ·   ·      ", 100),
-        ("   ˙ · ˙ · ˙ · ˙     ", 110),
-        ("the soil darkens gently", 140),
-    ] {
-        show_frame(st, Some(msg), delay)?;
+    let frames = [
+        vec![format!("{WATER}      ·{RESET}"), String::new(), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
+        vec![format!("{WATER}    ·   ·{RESET}"), format!("{WATER}      ·{RESET}"), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
+        vec![format!("{WATER}  ˙ · ˙ · ˙{RESET}"), format!("{MUTED}the soil darkens gently{RESET}"), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
+    ];
+
+    for frame in frames {
+        print!("{}", centered_overlay(&frame));
+        io::stdout().flush()?;
+        thread::sleep(Duration::from_millis(140));
     }
     Ok(())
 }
 
-fn animate_light(st: &State, direction: &str) -> io::Result<()> {
-    let frames: [&str; 3] = match direction {
-        "left" => ["☀  ·", "☀  · ·", "soft light settles from the left"],
-        "right" => ["·  ☀", "· ·  ☀", "soft light settles from the right"],
-        _ => ["   ☀", "   ↓", "soft light settles above"],
+fn animate_light(direction: &str, st: &State) -> io::Result<()> {
+    let source = match direction {
+        "left" => format!("{SUN}☀  ·  ·{RESET}"),
+        "right" => format!("{SUN}·  ·  ☀{RESET}"),
+        _ => format!("{SUN}   ☀{RESET}"),
     };
-    for msg in frames {
-        show_frame(st, Some(msg), 125)?;
+    let direction_label = match direction {
+        "left" => "soft light settles from the left",
+        "right" => "soft light settles from the right",
+        _ => "soft light settles overhead",
+    };
+
+    let frames = [
+        vec![source.clone(), format!("{MUTED}{direction_label}{RESET}"), format!("light {} {:>5.1}%", bar(st.light, 12), st.light)],
+        vec![source, format!("{MUTED}the crown slowly remembers{RESET}"), format!("light {} {:>5.1}%", bar(st.light, 12), st.light)],
+    ];
+
+    for frame in frames {
+        print!("{}", centered_overlay(&frame));
+        io::stdout().flush()?;
+        thread::sleep(Duration::from_millis(160));
     }
     Ok(())
 }
 
-fn animate_prune(st: &State, side: &str) -> io::Result<()> {
-    let target = match side {
-        "left" => "left branch",
-        "right" => "right branch",
-        _ => "crown",
-    };
-    for msg in ["      ✂", "     ✂ ·", target] {
-        show_frame(st, Some(msg), 120)?;
+fn animate_prune(side: &str, st: &State) -> io::Result<()> {
+    let frames = [
+        vec![format!("{HEALTH}✂{RESET}"), format!("{MUTED}{side} branch{RESET}")],
+        vec![format!("{HEALTH}✂ ·{RESET}"), format!("{MUTED}a clean cut{RESET}"), format!("health {} {:>5.1}%", bar(st.health, 12), st.health)],
+    ];
+    for frame in frames {
+        print!("{}", centered_overlay(&frame));
+        io::stdout().flush()?;
+        thread::sleep(Duration::from_millis(150));
     }
     Ok(())
+}
+
+fn watch_help() -> String {
+    let (_, cols) = terminal_size();
+    let lines = [
+        format!("{TITLE}bonzai controls{RESET}"),
+        String::new(),
+        format!("{WATER}w / r{RESET}   water"),
+        format!("{SUN}a / s / d{RESET}   light left / center / right"),
+        format!("{HEALTH}j / k / l{RESET}   prune left / top / right"),
+        format!("{TITLE}h / ?{RESET}   help"),
+        format!("{TITLE}q{RESET}   leave"),
+        String::new(),
+        format!("{MUTED}Actions have a short cooldown so one held key cannot flood the tree.{RESET}"),
+        format!("{MUTED}Light history affects future growth. Water and pruning affect vigor and structure.{RESET}"),
+        String::new(),
+        format!("{DIM}press any key to return{RESET}"),
+    ];
+
+    let mut out = String::new();
+    out.push_str("\x1b[2J\x1b[H");
+    let (rows, _) = terminal_size();
+    out.push_str(&"\n".repeat(rows.saturating_sub(lines.len()) / 2));
+    for line in lines {
+        out.push_str(&center_line(&line, cols));
+        out.push('\n');
+    }
+    out
 }
 
 fn drain_input() {
-    let _ = Command::new("stty")
-        .args(["min", "0", "time", "0"])
-        .status();
+    let _ = Command::new("stty").args(["min", "0", "time", "0"]).status();
     let mut buf = [0u8; 64];
     loop {
         match io::stdin().read(&mut buf) {
@@ -825,35 +846,7 @@ fn drain_input() {
             Ok(_) => {}
         }
     }
-    let _ = Command::new("stty")
-        .args(["min", "0", "time", "1"])
-        .status();
-}
-
-fn watch_help() -> String {
-    let (cols, rows) = terminal_size();
-    let lines = [
-        format!("{TITLE}bonzai controls{RESET}"),
-        String::new(),
-        format!("{WATER}w / r{RESET}     water"),
-        format!("{SUN}a / s / d{RESET} move light left / center / right"),
-        format!("{HEALTH}j / k / l{RESET} prune left / crown / right"),
-        format!("{TITLE}h or ?{RESET}    help"),
-        format!("{TITLE}q{RESET}         leave viewer"),
-        String::new(),
-        format!("{DIM}Actions have a short cooldown so key repeat cannot queue an endless loop.{RESET}"),
-        format!("{DIM}Light history, water stress and pruning affect future growth.{RESET}"),
-        String::new(),
-        format!("{MUTED}press any key to return{RESET}"),
-    ];
-    let top_pad = rows.saturating_sub(lines.len()) / 2;
-    let mut out = String::from("\x1b[2J\x1b[H");
-    out.push_str(&"\n".repeat(top_pad));
-    for line in lines {
-        out.push_str(&centered_line(&line, cols));
-        out.push('\n');
-    }
-    out
+    let _ = Command::new("stty").args(["min", "0", "time", "1"]).status();
 }
 
 fn watch() -> io::Result<()> {
@@ -862,103 +855,94 @@ fn watch() -> io::Result<()> {
         .status();
 
     let result = (|| {
-        let mut last_action = Instant::now()
-            .checked_sub(Duration::from_millis(ACTION_COOLDOWN_MS))
-            .unwrap_or_else(Instant::now);
-        let mut notice: Option<String> = None;
-
+        let mut last_action = Instant::now() - Duration::from_millis(ACTION_COOLDOWN_MS);
         loop {
             let st = get_snapshot();
-            print!("{}", render(&st, notice.as_deref()));
+            print!("{}", render(&st));
             io::stdout().flush()?;
 
             let mut buf = [0u8; 1];
-            if io::stdin().read(&mut buf).unwrap_or(0) == 0 {
-                thread::sleep(Duration::from_millis(80));
-                continue;
-            }
+            if io::stdin().read(&mut buf).unwrap_or(0) > 0 {
+                let key = buf[0] as char;
+                if key == 'q' {
+                    break;
+                }
 
-            let key = buf[0] as char;
-            if key == 'q' {
-                break;
-            }
+                if matches!(key, 'w' | 'r' | 'a' | 's' | 'd' | 'j' | 'k' | 'l')
+                    && last_action.elapsed() < Duration::from_millis(ACTION_COOLDOWN_MS)
+                {
+                    let (_, cols) = terminal_size();
+                    let msg = format!("{MUTED}give the tree a second{RESET}");
+                    print!("\x1b[2J\x1b[H\n{}\n", center_line(&msg, cols));
+                    io::stdout().flush()?;
+                    drain_input();
+                    thread::sleep(Duration::from_millis(180));
+                    continue;
+                }
 
-            if matches!(key, 'h' | '?') {
-                print!("{}", watch_help());
-                io::stdout().flush()?;
-                let _ = Command::new("stty").args(["min", "1", "time", "0"]).status();
-                let _ = io::stdin().read(&mut buf);
-                drain_input();
-                notice = None;
-                continue;
-            }
-
-            let actionable = matches!(key, 'w' | 'r' | 'a' | 's' | 'd' | 'j' | 'k' | 'l');
-            if !actionable {
-                continue;
-            }
-
-            if last_action.elapsed() < Duration::from_millis(ACTION_COOLDOWN_MS) {
-                notice = Some("easy there · let the tree settle for a moment".into());
-                drain_input();
-                continue;
-            }
-
-            last_action = Instant::now();
-            notice = None;
-
-            match key {
-                'w' | 'r' => {
-                    let before = get_snapshot();
-                    if before.water >= 96.0 {
-                        notice = Some("the soil is already well hydrated".into());
-                    } else {
-                        send("water")?;
+                match key {
+                    'w' | 'r' => {
+                        let _ = send("water")?;
                         let after = get_snapshot();
                         animate_water(&after)?;
-                        notice = Some(format!("watered · {:.0}%", after.water));
+                        last_action = Instant::now();
+                        drain_input();
                     }
+                    'a' => {
+                        let _ = send("light left")?;
+                        let after = get_snapshot();
+                        animate_light("left", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    's' => {
+                        let _ = send("light center")?;
+                        let after = get_snapshot();
+                        animate_light("center", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    'd' => {
+                        let _ = send("light right")?;
+                        let after = get_snapshot();
+                        animate_light("right", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    'j' => {
+                        let _ = send("prune left")?;
+                        let after = get_snapshot();
+                        animate_prune("left", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    'k' => {
+                        let _ = send("prune top")?;
+                        let after = get_snapshot();
+                        animate_prune("top", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    'l' => {
+                        let _ = send("prune right")?;
+                        let after = get_snapshot();
+                        animate_prune("right", &after)?;
+                        last_action = Instant::now();
+                        drain_input();
+                    }
+                    'h' | '?' => {
+                        print!("{}", watch_help());
+                        io::stdout().flush()?;
+                        let _ = Command::new("stty").args(["min", "1", "time", "0"]).status();
+                        let _ = io::stdin().read(&mut buf);
+                        let _ = Command::new("stty").args(["min", "0", "time", "1"]).status();
+                        drain_input();
+                    }
+                    _ => {}
                 }
-                'a' => {
-                    send("light left")?;
-                    let after = get_snapshot();
-                    animate_light(&after, "left")?;
-                    notice = Some("light moved left".into());
-                }
-                's' => {
-                    send("light center")?;
-                    let after = get_snapshot();
-                    animate_light(&after, "center")?;
-                    notice = Some("light centered".into());
-                }
-                'd' => {
-                    send("light right")?;
-                    let after = get_snapshot();
-                    animate_light(&after, "right")?;
-                    notice = Some("light moved right".into());
-                }
-                'j' => {
-                    send("prune left")?;
-                    let after = get_snapshot();
-                    animate_prune(&after, "left")?;
-                    notice = Some("left side pruned".into());
-                }
-                'k' => {
-                    send("prune top")?;
-                    let after = get_snapshot();
-                    animate_prune(&after, "top")?;
-                    notice = Some("crown pruned".into());
-                }
-                'l' => {
-                    send("prune right")?;
-                    let after = get_snapshot();
-                    animate_prune(&after, "right")?;
-                    notice = Some("right side pruned".into());
-                }
-                _ => {}
             }
 
-            drain_input();
+            thread::sleep(Duration::from_millis(90));
         }
         Ok(())
     })();
@@ -984,7 +968,7 @@ fn start_daemon() -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    for _ in 0..30 {
+    for _ in 0..20 {
         thread::sleep(Duration::from_millis(50));
         if daemon_running() {
             println!("bonzai started");
@@ -1033,7 +1017,7 @@ fn usage() {
 {TITLE}LIFECYCLE{RESET}\n  init                     Plant a new tree\n  start                    Start the background daemon\n  stop                     Stop the daemon\n  reset                    Plant a completely new tree\n\n\
 {TITLE}INFO{RESET}\n  help, -h, --help         Show this help\n  version, -V, --version   Print the version\n\n\
 {DIM}Interactive keys{RESET}\n  w/r water   a/s/d light   j/k/l prune   h/? help   q leave\n\n\
-{DIM}Actions are rate-limited in watch mode to prevent terminal key repeat from queuing them.{RESET}\n\n\
+{DIM}Growth model: directional light memory → phototropism; low light → longer shoots;\nwater stress → fewer leaves and branches; pruning → persistent structural pressure.{RESET}\n\n\
 {DIM}Data: ~/.local/share/bonzai or $XDG_DATA_HOME/bonzai{RESET}\n"
     );
 }
@@ -1069,7 +1053,7 @@ fn main() -> io::Result<()> {
         }
         "show" => {
             let st = get_snapshot();
-            print!("{}", render(&st, None));
+            print!("{}", render(&st));
             print!("\x1b[?25h");
             Ok(())
         }
