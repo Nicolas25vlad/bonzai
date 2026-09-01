@@ -318,7 +318,7 @@ fn render(st: &State) -> String {
     let dir = match st.light_dir { -1 => "←", 1 => "→", _ => "↑" };
     out.push_str(&format!(
         "\n  bonzai v{VERSION}   age {}   growth {:>5.1}%\n  💧 {} {:>5.1}%   ☀ {} {:>5.1}% {dir}   ♥ {} {:>5.1}%\n  [w] water   [a/s/d] light L/C/R   [j/k/l] prune L/T/R   [q] quit view\n",
-        human_age(st.age_secs()), bar(st.water,10), st.water, bar(st.light,10), st.light, bar(st.health,10), st.health
+        human_age(st.age_secs()), st.growth, bar(st.water,10), st.water, bar(st.light,10), st.light, bar(st.health,10), st.health
     ));
     out
 }
