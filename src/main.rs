@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.6";
+const VERSION: &str = "0.2.7";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
 
@@ -442,21 +442,18 @@ fn branch_delta(rng: &mut Rng, kind: BranchKind, age: i32, vigor: f32, tropism: 
 
     match kind {
         BranchKind::Trunk => {
-            let mut dx = if age < 8 {
-                rng.range(-2, 3)
-            } else {
-                rng.range(-1, 2)
-            };
+            // Keep a readable stem above the planter before the trunk begins
+            // wandering. Without this anchor young trees can look like foliage
+            // floating directly over the pot.
+            if age <= 4 {
+                return (0, -1);
+            }
+
+            let mut dx = rng.range(-1, 2);
             if light_pull != 0 && rng.chance(24, 100) {
                 dx += light_pull;
             }
-            let dy = if age < 5 {
-                if rng.chance(30, 100) {
-                    -1
-                } else {
-                    0
-                }
-            } else if rng.chance((58.0 + vigor * 26.0) as u64, 100) {
+            let dy = if rng.chance((62.0 + vigor * 24.0) as u64, 100) {
                 -1
             } else {
                 0
@@ -590,6 +587,14 @@ fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tr
             let start_x = px - row_width / 2 + rng.range(-1, 2);
             let row_y = py + row - height / 2;
 
+            // Keep foliage above a small visual buffer around the planter.
+            // Branches may descend slightly, but leaves should never appear to
+            // grow through the ceramic body.
+            let foliage_floor = c.h - 9;
+            if row_y >= foliage_floor {
+                continue;
+            }
+
             for col in 0..row_width {
                 if rng.chance(density, 100) {
                     let bright = rng.chance((10.0 + vigor * 18.0) as u64, 100);
@@ -629,6 +634,12 @@ fn draw_cb_branch(
 
         x = (x + dx).clamp(3, c.w - 5);
         y = (y + dy).clamp(2, c.h - 6);
+
+        // Dying/dead branch tips render as `&`, so they must obey the
+        // same lower foliage boundary as leaf sprays.
+        if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) && y >= c.h - 9 {
+            continue;
+        }
 
         let glyph = branch_glyph(effective_kind, life, dx, dy);
         let cell_kind = if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) {
@@ -750,7 +761,7 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
         &mut c,
         &mut rng,
         base_x,
-        base_y - 1,
+        base_y,
         BranchKind::Trunk,
         life.max(10),
         0,
@@ -770,7 +781,12 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     for (i, (row, kind)) in pot.iter().enumerate() {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
-            if ch != ' ' {
+            // The planter is an opaque foreground object. Clearing spaces as
+            // well as drawing its outline prevents branches or leaves from
+            // showing through the inside of the pot.
+            if ch == ' ' {
+                c.set(sx + j as i32, base_y + i as i32, ' ', 0);
+            } else {
                 c.set(sx + j as i32, base_y + i as i32, ch, *kind);
             }
         }

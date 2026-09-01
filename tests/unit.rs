@@ -209,5 +209,56 @@ mod app {
             assert!(painted.contains("\x1b[E"));
             assert!(painted.ends_with("\x1b[J"));
         }
+
+        #[test]
+        fn trunk_has_a_visible_stem_above_the_planter() {
+            let st = stable_state();
+            let canvas = grow_tree(&st, 68, 28);
+            let base_x = canvas.w / 2;
+            let base_y = canvas.h - 5;
+
+            for y in (base_y - 4)..base_y {
+                let cell = canvas.get(base_x, y);
+                assert!(
+                    matches!(cell.kind, 1 | 5),
+                    "expected trunk at ({base_x}, {y}), found {:?}",
+                    (cell.ch, cell.kind)
+                );
+                assert_ne!(cell.ch, '&');
+            }
+        }
+
+        #[test]
+        fn foliage_never_reaches_the_planter_buffer() {
+            let st = stable_state();
+            let canvas = grow_tree(&st, 68, 28);
+            let foliage_floor = canvas.h - 9;
+
+            for y in foliage_floor..canvas.h {
+                for x in 0..canvas.w {
+                    assert!(
+                        !matches!(canvas.get(x, y).kind, 2..=4),
+                        "foliage leaked into planter buffer at ({x}, {y})"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn planter_body_is_opaque_to_tree_cells() {
+            let st = stable_state();
+            let canvas = grow_tree(&st, 68, 28);
+            let base_y = canvas.h - 5;
+
+            for y in base_y..canvas.h - 1 {
+                for x in (canvas.w / 2 - 12)..=(canvas.w / 2 + 12) {
+                    let cell = canvas.get(x, y);
+                    assert!(
+                        !matches!(cell.kind, 1..=5),
+                        "tree cell visible through planter at ({x}, {y})"
+                    );
+                }
+            }
+        }
     }
 }
