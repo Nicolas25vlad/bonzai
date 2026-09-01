@@ -26,6 +26,62 @@ jobs:
       - name: Apply persistent tree migration
         run: python3 tools/persistent_tree_v030.py
 
+      - name: Normalize generated code
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main = Path('src/main.rs')
+          s = main.read_text()
+          s = s.replace(
+              'fn is_tree_cell(cell: Cell) -> bool {',
+              '#[allow(dead_code)]\nfn is_tree_cell(cell: Cell) -> bool {',
+              1,
+          )
+          old = '''        let side = if parent.side == 0 {
+              if shape_bias > 0.18 && rng.chance(68, 100) {
+                  1
+              } else if shape_bias < -0.18 && rng.chance(68, 100) {
+                  -1
+              } else if rng.chance(1, 2) {
+                  -1
+              } else {
+                  1
+              }
+          } else if rng.chance(72, 100) {
+              parent.side
+          } else {
+              -parent.side
+          };'''
+          new = '''        let random_side = if rng.chance(1, 2) { -1 } else { 1 };
+          let side = if parent.side == 0 {
+              if shape_bias > 0.18 && rng.chance(68, 100) {
+                  1
+              } else if shape_bias < -0.18 && rng.chance(68, 100) {
+                  -1
+              } else {
+                  random_side
+              }
+          } else if rng.chance(72, 100) {
+              parent.side
+          } else {
+              -parent.side
+          };'''
+          if old not in s:
+              raise SystemExit('side selection block not found')
+          main.write_text(s.replace(old, new, 1))
+
+          tests = Path('tests/unit.rs')
+          t = tests.read_text()
+          old_sig = '        fn topology_signature(st: &State) -> Vec<(u32, u32, i8, u8, u8, i8, u8, bool, u32)> {'
+          new_sig = '''        type TopologySignature = (u32, u32, i8, u8, u8, i8, u8, bool, u32);
+
+          fn topology_signature(st: &State) -> Vec<TopologySignature> {'''
+          if old_sig not in t:
+              raise SystemExit('topology signature helper not found')
+          tests.write_text(t.replace(old_sig, new_sig, 1))
+          PY
+
       - name: Validate
         run: |
           cargo fmt --all
