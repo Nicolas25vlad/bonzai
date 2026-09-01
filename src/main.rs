@@ -9,19 +9,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.3";
+const VERSION: &str = "0.2.4";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 850;
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 const TITLE: &str = "\x1b[38;5;180m";
-const TRUNK: &str = "\x1b[38;5;137m";
-const TRUNK_DARK: &str = "\x1b[38;5;94m";
-const LEAF: &str = "\x1b[38;5;108m";
-const LEAF_BRIGHT: &str = "\x1b[38;5;151m";
-const LEAF_DARK: &str = "\x1b[38;5;65m";
-const POT: &str = "\x1b[38;5;173m";
+const TRUNK: &str = "\x1b[38;5;11m";
+const TRUNK_DARK: &str = "\x1b[38;5;3m";
+const LEAF: &str = "\x1b[38;5;2m";
+const LEAF_BRIGHT: &str = "\x1b[1;38;5;10m";
+const LEAF_DARK: &str = "\x1b[38;5;2m";
+const POT: &str = "\x1b[38;5;245m";
 const WATER: &str = "\x1b[38;5;110m";
 const SUN: &str = "\x1b[38;5;221m";
 const HEALTH: &str = "\x1b[38;5;151m";
@@ -404,135 +404,298 @@ impl Rng {
     }
 }
 
-fn draw_branch(
-    c: &mut Canvas,
-    rng: &mut Rng,
-    mut x: i32,
-    mut y: i32,
-    mut dir: i32,
-    mut life: i32,
-    depth: u8,
-    tropism: f32,
-    vigor: f32,
-    prune_left: u32,
-    prune_right: u32,
-) {
-    let mut previous_x = x;
-    while life > 0 && y > 2 {
-        let photo_step = if tropism > 0.25 {
-            1
-        } else if tropism < -0.25 {
-            -1
-        } else {
-            0
-        };
+// Visual grammar intentionally follows the classic cbonsai look.
+// cbonsai is GPL-3.0 and credited in README.md. Bonzai keeps its own
+// persistent simulation while using a compatible terminal aesthetic.
+#[derive(Copy, Clone, PartialEq)]
+enum BranchKind {
+    Trunk,
+    Left,
+    Right,
+    Dying,
+    Dead,
+}
 
-        if rng.chance(if depth == 0 { 28 } else { 20 }, 100) {
-            dir = (dir + photo_step).clamp(-2, 2);
+fn draw_str(c: &mut Canvas, x: i32, y: i32, text: &str, kind: u8) {
+    for (i, ch) in text.chars().enumerate() {
+        if ch != ' ' {
+            c.set(x + i as i32, y, ch, kind);
         }
-        if rng.chance(24, 100) {
-            dir = (dir + rng.range(-1, 2)).clamp(-2, 2);
-        }
-
-        previous_x = x;
-        if rng.chance(if depth == 0 { 34 } else { 62 }, 100) {
-            x += dir.signum();
-        }
-        y -= 1;
-
-        let glyph = if x < previous_x {
-            '/'
-        } else if x > previous_x {
-            '\\'
-        } else if depth == 0 && life > 8 {
-            '|'
-        } else if depth == 0 {
-            'Y'
-        } else {
-            '|'
-        };
-        c.set(x, y, glyph, if depth == 0 && life > 8 { 5 } else { 1 });
-
-        let branch_chance = ((8.0 + life as f32 * 0.55) * vigor).clamp(2.0, 20.0) as u64;
-        if life > 5 && depth < 3 && rng.chance(branch_chance, 100) {
-            let mut branch_dir = if rng.chance(1, 2) { -1 } else { 1 };
-            if photo_step != 0 && rng.chance(58, 100) {
-                branch_dir = photo_step;
-            }
-            let pruned = (branch_dir < 0
-                && prune_left > 0
-                && rng.chance(prune_left.min(8) as u64, 10))
-                || (branch_dir > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
-
-            if !pruned {
-                let child_life = (life / 2 + rng.range(1, 5)).max(3);
-                draw_branch(
-                    c,
-                    rng,
-                    x,
-                    y,
-                    branch_dir,
-                    child_life,
-                    depth + 1,
-                    tropism,
-                    vigor,
-                    prune_left,
-                    prune_right,
-                );
-            }
-        }
-
-        life -= 1;
-    }
-
-    if depth > 0 {
-        draw_leaf_cluster(c, rng, x, y, tropism, vigor, depth);
     }
 }
 
-fn draw_leaf_cluster(
-    c: &mut Canvas,
-    rng: &mut Rng,
-    cx: i32,
-    cy: i32,
-    tropism: f32,
-    vigor: f32,
-    depth: u8,
-) {
-    let rx = (2 + depth as i32 + (vigor * 1.5) as i32).clamp(2, 5);
-    let ry = (1 + (vigor * 1.5) as i32).clamp(1, 3);
-    let light_shift = if tropism > 0.2 {
+fn branch_delta(rng: &mut Rng, kind: BranchKind, age: i32, vigor: f32, tropism: f32) -> (i32, i32) {
+    let light_pull = if tropism > 0.25 {
         1
-    } else if tropism < -0.2 {
+    } else if tropism < -0.25 {
         -1
     } else {
         0
     };
 
-    for yy in -ry..=ry {
-        for xx in -rx..=rx {
-            let nx = xx as f32 / rx as f32;
-            let ny = yy as f32 / ry.max(1) as f32;
-            if nx * nx + ny * ny > 1.0 {
-                continue;
+    match kind {
+        BranchKind::Trunk => {
+            let mut dx = if age < 8 {
+                rng.range(-2, 3)
+            } else {
+                rng.range(-1, 2)
+            };
+            if light_pull != 0 && rng.chance(24, 100) {
+                dx += light_pull;
             }
-            if !rng.chance((48.0 + vigor * 34.0) as u64, 100) {
-                continue;
-            }
-
-            let pull = if light_shift != 0 && rng.chance(45, 100) {
-                light_shift
+            let dy = if age < 5 {
+                if rng.chance(30, 100) {
+                    -1
+                } else {
+                    0
+                }
+            } else if rng.chance((58.0 + vigor * 26.0) as u64, 100) {
+                -1
             } else {
                 0
             };
-            let roll = rng.next() % 10;
-            let (ch, kind) = match roll {
-                0 => ('@', 3),
-                1 | 2 => ('*', 4),
-                _ => ('&', 2),
-            };
-            c.set(cx + xx + pull, cy + yy, ch, kind);
+            (dx.clamp(-2, 2), dy)
         }
+        BranchKind::Left => {
+            let mut dx = match rng.next() % 10 {
+                0 | 1 => -2,
+                2..=6 => -1,
+                7 | 8 => 0,
+                _ => 1,
+            };
+            if light_pull < 0 && rng.chance(30, 100) {
+                dx -= 1;
+            }
+            let dy = match rng.next() % 10 {
+                0 | 1 => -1,
+                8 | 9 => 1,
+                _ => 0,
+            };
+            (dx.clamp(-3, 1), dy)
+        }
+        BranchKind::Right => {
+            let mut dx = match rng.next() % 10 {
+                0 | 1 => 2,
+                2..=6 => 1,
+                7 | 8 => 0,
+                _ => -1,
+            };
+            if light_pull > 0 && rng.chance(30, 100) {
+                dx += 1;
+            }
+            let dy = match rng.next() % 10 {
+                0 | 1 => -1,
+                8 | 9 => 1,
+                _ => 0,
+            };
+            (dx.clamp(-1, 3), dy)
+        }
+        BranchKind::Dying => {
+            let mut dx = rng.range(-3, 4);
+            if light_pull != 0 && rng.chance(28, 100) {
+                dx += light_pull;
+            }
+            let dy = if rng.chance(18, 100) {
+                -1
+            } else if rng.chance(8, 100) {
+                1
+            } else {
+                0
+            };
+            (dx.clamp(-3, 3), dy)
+        }
+        BranchKind::Dead => (rng.range(-1, 2), rng.range(-1, 2)),
+    }
+}
+
+fn branch_glyph(kind: BranchKind, life: i32, dx: i32, dy: i32) -> &'static str {
+    if life < 4 || matches!(kind, BranchKind::Dying | BranchKind::Dead) {
+        return "&";
+    }
+
+    match kind {
+        BranchKind::Trunk => {
+            if dy == 0 {
+                "/~"
+            } else if dx < 0 {
+                "\\|"
+            } else if dx == 0 {
+                "/|\\"
+            } else {
+                "|/"
+            }
+        }
+        BranchKind::Left => {
+            if dy > 0 {
+                "\\"
+            } else if dy == 0 {
+                "\\_"
+            } else if dx < 0 {
+                "\\|"
+            } else if dx == 0 {
+                "/|"
+            } else {
+                "/"
+            }
+        }
+        BranchKind::Right => {
+            if dy > 0 {
+                "/"
+            } else if dy == 0 {
+                "_/"
+            } else if dx < 0 {
+                "\\|"
+            } else if dx == 0 {
+                "/|"
+            } else {
+                "/"
+            }
+        }
+        BranchKind::Dying | BranchKind::Dead => "&",
+    }
+}
+
+fn draw_leaf_spray(c: &mut Canvas, rng: &mut Rng, x: i32, y: i32, vigor: f32, tropism: f32) {
+    let count = (7.0 + vigor * 13.0) as i32;
+    let pull = if tropism > 0.25 {
+        1
+    } else if tropism < -0.25 {
+        -1
+    } else {
+        0
+    };
+    for _ in 0..count {
+        let mut dx = rng.range(-4, 5);
+        if pull != 0 && rng.chance(42, 100) {
+            dx += pull;
+        }
+        let dy = rng.range(-2, 3);
+        let bright = rng.chance((12.0 + vigor * 20.0) as u64, 100);
+        c.set(x + dx, y + dy, '&', if bright { 3 } else { 2 });
+    }
+}
+
+fn draw_cb_branch(
+    c: &mut Canvas,
+    rng: &mut Rng,
+    mut x: i32,
+    mut y: i32,
+    kind: BranchKind,
+    mut life: i32,
+    depth: u8,
+    vigor: f32,
+    tropism: f32,
+    prune_left: u32,
+    prune_right: u32,
+) {
+    let start_life = life.max(1);
+    let mut age = 0;
+    let mut shoot_cooldown = 3i32;
+
+    while life > 0 && y > 2 && y < c.h - 4 {
+        life -= 1;
+        age += 1;
+
+        let effective_kind = if life < 4 { BranchKind::Dying } else { kind };
+        let (dx, dy) = branch_delta(rng, effective_kind, age, vigor, tropism);
+
+        x = (x + dx).clamp(3, c.w - 5);
+        y = (y + dy).clamp(2, c.h - 6);
+
+        let glyph = branch_glyph(effective_kind, life, dx, dy);
+        let cell_kind = if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) {
+            if rng.chance(18, 100) {
+                3
+            } else {
+                2
+            }
+        } else if rng.chance(45, 100) {
+            1
+        } else {
+            5
+        };
+        draw_str(c, x, y, glyph, cell_kind);
+
+        if life <= 2 {
+            draw_leaf_spray(c, rng, x, y, vigor, tropism);
+            if depth < 3 {
+                let leaf_life = 2 + rng.range(0, 3);
+                draw_cb_branch(
+                    c,
+                    rng,
+                    x,
+                    y,
+                    BranchKind::Dead,
+                    leaf_life,
+                    depth + 1,
+                    vigor,
+                    tropism,
+                    prune_left,
+                    prune_right,
+                );
+            }
+            continue;
+        }
+
+        if kind == BranchKind::Trunk && life < 6 && depth < 3 {
+            let dying_life = 3 + rng.range(0, 3);
+            draw_cb_branch(
+                c,
+                rng,
+                x,
+                y,
+                BranchKind::Dying,
+                dying_life,
+                depth + 1,
+                vigor,
+                tropism,
+                prune_left,
+                prune_right,
+            );
+        }
+
+        let branch_gate = ((12.0 + vigor * 17.0) as u64).min(34);
+        if depth < 3 && shoot_cooldown <= 0 && life > 5 && rng.chance(branch_gate, 100) {
+            let prefer_right = tropism > 0.2;
+            let prefer_left = tropism < -0.2;
+            let side = if prefer_right && rng.chance(63, 100) {
+                1
+            } else if prefer_left && rng.chance(63, 100) {
+                -1
+            } else if rng.chance(1, 2) {
+                -1
+            } else {
+                1
+            };
+
+            let pruned = (side < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 10))
+                || (side > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
+
+            if !pruned {
+                let child_kind = if side < 0 {
+                    BranchKind::Left
+                } else {
+                    BranchKind::Right
+                };
+                let child_life = ((life + start_life / 5) as f32 * (0.62 + vigor * 0.2)) as i32;
+                draw_cb_branch(
+                    c,
+                    rng,
+                    x,
+                    y,
+                    child_kind,
+                    child_life.max(5),
+                    depth + 1,
+                    vigor,
+                    tropism,
+                    prune_left,
+                    prune_right,
+                );
+            }
+            shoot_cooldown = 4;
+        }
+
+        shoot_cooldown -= 1;
     }
 }
 
@@ -543,59 +706,43 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
     let mut rng = Rng::new(st.seed);
 
     let photo = st.photo_bias();
-    let current_light_bias = st.light_dir as f32 * (st.light / 100.0) * 0.24;
-    let tropism = (photo * 1.15 + current_light_bias).clamp(-1.25, 1.25);
+    let current_light_bias = st.light_dir as f32 * (st.light / 100.0) * 0.22;
+    let tropism = (photo * 1.1 + current_light_bias).clamp(-1.2, 1.2);
     let stress = ((st.drought_stress + st.wet_stress) / 75.0).clamp(0.0, 0.72);
-    let vigor = ((st.health / 100.0) * (1.0 - stress)).clamp(0.12, 1.0);
-    let light_quality = (st.light / 100.0).clamp(0.0, 1.0);
-    let etiolation = (1.0 - light_quality) * 0.55;
+    let vigor = ((st.health / 100.0) * (1.0 - stress)).clamp(0.18, 1.0);
+    let low_light_stretch = ((100.0 - st.light) / 100.0 * 4.0) as i32;
 
-    let max_steps = 10 + (st.growth / 100.0 * 17.0) as i32 + (etiolation * 4.0) as i32;
-    let top_penalty = (st.prune_top.min(7) as i32) * 2;
-    let trunk_steps = (max_steps - top_penalty).max(8);
+    let life =
+        12 + (st.growth / 100.0 * 22.0) as i32 + low_light_stretch - (st.prune_top.min(6) as i32);
 
-    draw_branch(
+    draw_cb_branch(
         &mut c,
         &mut rng,
         base_x,
-        base_y,
+        base_y - 1,
+        BranchKind::Trunk,
+        life.max(10),
         0,
-        trunk_steps,
-        0,
-        tropism,
         vigor,
+        tropism,
         st.prune_left,
         st.prune_right,
     );
 
-    let crown_y = (base_y - trunk_steps + 2).max(3);
-    let crown_shift = (tropism * 2.0).round() as i32;
-    for offset in [-4, 0, 4] {
-        if rng.chance((48.0 * vigor + 32.0) as u64, 100) {
-            let jitter = rng.range(-1, 2);
-            draw_leaf_cluster(
-                &mut c,
-                &mut rng,
-                base_x + offset + crown_shift,
-                crown_y + jitter,
-                tropism,
-                vigor,
-                1,
-            );
-        }
-    }
-
-    let pot = [
-        "       _________       ",
-        "      /_________\\      ",
-        "       \\       /       ",
-        "        \\_____/        ",
-    ];
+    // Classic compact cbonsai-style planter.
+    let pot = ["(---./~~~\\.---)", " (           ) ", "  (_________)  "];
     for (i, row) in pot.iter().enumerate() {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
             if ch != ' ' {
-                c.set(sx + j as i32, base_y + i as i32, ch, 7);
+                let kind = if i == 0 && matches!(ch, '~' | '.' | '/' | '\\') {
+                    1
+                } else if i == 0 && ch == '-' {
+                    3
+                } else {
+                    7
+                };
+                c.set(sx + j as i32, base_y + i as i32, ch, kind);
             }
         }
     }
@@ -617,7 +764,7 @@ fn apply_effect(c: &mut Canvas, effect: SceneEffect) {
         SceneEffect::Water(frame) => {
             let fall = frame as i32;
             for (dx, offset) in [(-6, 0), (-2, 2), (2, 1), (6, 3)] {
-                let y = (3 + offset + fall * 3).min(base_y - 2);
+                let y = (2 + offset + fall * 3).min(base_y - 2);
                 c.set(cx + dx, y, if frame < 2 { '.' } else { '|' }, 8);
             }
         }
