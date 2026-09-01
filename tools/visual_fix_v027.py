@@ -48,11 +48,7 @@ s = replace_once(
                 return (0, -1);
             }
 
-            let mut dx = if age < 9 {
-                rng.range(-1, 2)
-            } else {
-                rng.range(-1, 2)
-            };
+            let mut dx = rng.range(-1, 2);
             if light_pull != 0 && rng.chance(24, 100) {
                 dx += light_pull;
             }
@@ -92,6 +88,21 @@ s = replace_once(
             }
 ''',
     "foliage floor",
+)
+
+s = replace_once(
+    s,
+    '''        let glyph = branch_glyph(effective_kind, life, dx, dy);
+''',
+    '''        // Dying/dead branch tips render as `&`, so they must obey the
+        // same lower foliage boundary as leaf sprays.
+        if matches!(effective_kind, BranchKind::Dying | BranchKind::Dead) && y >= c.h - 9 {
+            continue;
+        }
+
+        let glyph = branch_glyph(effective_kind, life, dx, dy);
+''',
+    "dying branch foliage floor",
 )
 
 s = replace_once(
