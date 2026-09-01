@@ -84,7 +84,8 @@ render = r'''fn compact_scene(st: &State, rows: usize, cols: usize) -> String {
         format!("{DIM}terminal too small for the tree{RESET}"),
         format!("{DIM}resize to at least 36 x 18{RESET}"),
         String::new(),
-        format!("{WATER}water{RESET} {:>3.0}%  {SUN}light{RESET} {:>3.0}%  {HEALTH}health{RESET} {:>3.0}%", st.water, st.light, st.health),
+        format!("{WATER}water{RESET} {:>3.0}%  {SUN}light{RESET} {:>3.0}%", st.water, st.light),
+        format!("{HEALTH}health{RESET} {:>3.0}%", st.health),
         format!("{DIM}[q] leave  [?] help{RESET}"),
     ];
 
@@ -373,9 +374,9 @@ insert = r'''
         fn frame_painter_never_emits_literal_newlines_or_full_clears() {
             let painted = frame_escape("alpha\nbeta\n");
             assert!(!painted.contains('\n'));
-            assert!(!painted.contains("\\x1b[2J"));
-            assert!(painted.contains("\\x1b[E"));
-            assert!(painted.ends_with("\\x1b[J"));
+            assert!(!painted.contains("\x1b[2J"));
+            assert!(painted.contains("\x1b[E"));
+            assert!(painted.ends_with("\x1b[J"));
         }
 '''
 needle = "    }\n}"
