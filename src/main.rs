@@ -302,23 +302,38 @@ fn bar(v: f32, n: usize) -> String {
 }
 
 fn render(st: &State) -> String {
+    const RESET: &str = "\x1b[0m";
+    const DIM: &str = "\x1b[2m";
+    const TITLE: &str = "\x1b[38;5;180m";
+    const TRUNK: &str = "\x1b[38;5;137m";
+    const LEAF: &str = "\x1b[38;5;108m";
+    const POT: &str = "\x1b[38;5;173m";
+    const WATER: &str = "\x1b[38;5;110m";
+    const SUN: &str = "\x1b[38;5;221m";
+    const HEALTH: &str = "\x1b[38;5;151m";
+    const MUTED: &str = "\x1b[38;5;245m";
+
     let w = 64; let h = 28;
     let c = grow_tree(st, w, h);
     let mut out = String::new();
     out.push_str("\x1b[?25l\x1b[2J\x1b[H");
+    out.push_str(&format!("{TITLE}                 bonzai  ·  a quiet place to grow{RESET}\n\n"));
     for y in 0..h {
         for x in 0..w {
             let cell = c.get(x,y);
-            let color = match cell.kind { 1 => "\x1b[38;5;94m", 2 => "\x1b[38;5;108m", 3 => "\x1b[38;5;137m", _ => "" };
+            let color = match cell.kind { 1 => TRUNK, 2 => LEAF, 3 => POT, _ => "" };
             if cell.kind == 0 { out.push(' '); }
-            else { out.push_str(color); out.push(cell.ch); out.push_str("\x1b[0m"); }
+            else { out.push_str(color); out.push(cell.ch); out.push_str(RESET); }
         }
         out.push('\n');
     }
     let dir = match st.light_dir { -1 => "←", 1 => "→", _ => "↑" };
     out.push_str(&format!(
-        "\n  bonzai v{VERSION}   age {}   growth {:>5.1}%\n  💧 {} {:>5.1}%   ☀ {} {:>5.1}% {dir}   ♥ {} {:>5.1}%\n  [w] water   [a/s/d] light L/C/R   [j/k/l] prune L/T/R   [q] quit view\n",
-        human_age(st.age_secs()), st.growth, bar(st.water,10), st.water, bar(st.light,10), st.light, bar(st.health,10), st.health
+        "\n  {TITLE}age{RESET} {}   {TITLE}growth{RESET} {:>5.1}%\n  {WATER}💧 water{RESET}  {} {:>5.1}%   {SUN}☀ light{RESET}  {} {:>5.1}% {dir}   {HEALTH}♥ health{RESET} {} {:>5.1}%\n\n  {DIM}[w]{RESET} water   {DIM}[a/s/d]{RESET} move light   {DIM}[j/k/l]{RESET} prune   {DIM}[h/?]{RESET} help   {DIM}[q]{RESET} leave\n  {MUTED}Your tree keeps growing while you code.{RESET}\n",
+        human_age(st.age_secs()), st.growth,
+        bar(st.water,10), st.water,
+        bar(st.light,10), st.light,
+        bar(st.health,10), st.health
     ));
     out
 }
@@ -331,6 +346,26 @@ fn human_age(s: u64) -> String {
 
 fn get_snapshot() -> State {
     if let Ok(s) = send("snapshot") { State::parse(&s).unwrap_or_else(load_state) } else { load_state() }
+}
+
+fn watch_help() -> String {
+    format!(r#"\x1b[2J\x1b[H\x1b[38;5;180m                         bonzai controls\x1b[0m
+
+  \x1b[38;5;110mw\x1b[0m       water your bonsai
+
+  \x1b[38;5;221ma / s / d\x1b[0m
+          move the light left / center / right
+
+  \x1b[38;5;151mj / k / l\x1b[0m
+          prune left / top / right
+
+  \x1b[38;5;180mh or ?\x1b[0m  show this little guide
+  \x1b[38;5;180mq\x1b[0m       return to your shell
+
+  \x1b[2mNothing is timed here. Take a minute, shape the tree, then go back to building things.\x1b[0m
+
+  press any key to return
+"#)
 }
 
 fn watch() -> io::Result<()> {
@@ -352,6 +387,12 @@ fn watch() -> io::Result<()> {
                     'j' => { let _ = send("prune left"); },
                     'k' => { let _ = send("prune top"); },
                     'l' => { let _ = send("prune right"); },
+                    'h' | '?' => {
+                        print!("{}", watch_help());
+                        io::stdout().flush()?;
+                        let _ = Command::new("stty").args(["min","1","time","0"]).status();
+                        let _ = io::stdin().read(&mut buf);
+                    },
                     _ => {}
                 }
             }
@@ -381,30 +422,50 @@ fn start_daemon() -> io::Result<()> {
 }
 
 fn print_status(st: &State) {
-    println!("bonzai 🌱");
-    println!("age:    {}", human_age(st.age_secs()));
-    println!("growth: {:>5.1}%", st.growth);
-    println!("water:  {} {:>5.1}%", bar(st.water, 12), st.water);
-    println!("light:  {} {:>5.1}%", bar(st.light, 12), st.light);
-    println!("health: {} {:>5.1}%", bar(st.health,12), st.health);
+    const R: &str = "\x1b[0m";
+    const TITLE: &str = "\x1b[38;5;180m";
+    const WATER: &str = "\x1b[38;5;110m";
+    const SUN: &str = "\x1b[38;5;221m";
+    const HEALTH: &str = "\x1b[38;5;151m";
+    println!("{TITLE}bonzai 🌱{R}  {}", human_age(st.age_secs()));
+    println!("{TITLE}growth{R} {:>5.1}%", st.growth);
+    println!("{WATER}water {R} {} {:>5.1}%", bar(st.water, 12), st.water);
+    println!("{SUN}light {R} {} {:>5.1}%", bar(st.light, 12), st.light);
+    println!("{HEALTH}health{R} {} {:>5.1}%", bar(st.health,12), st.health);
+    println!("\x1b[2mTip: `bonzai watch` for a quiet break.\x1b[0m");
 }
 
 fn usage() {
-    println!(r#"bonzai {VERSION} — a tiny bonsai that lives in your terminal
+    println!(r#"\x1b[38;5;180mbonzai {VERSION}\x1b[0m  ·  a living bonsai for your terminal
+\x1b[2mGrow it slowly. Shape it deliberately. Then get back to coding.\x1b[0m
 
-USAGE
-  bonzai init              create a new tree
-  bonzai start             start background daemon
-  bonzai stop              stop daemon
-  bonzai status            compact stats
-  bonzai show              render once
-  bonzai watch             interactive live view
-  bonzai water             water the tree
-  bonzai light left|center|right
-  bonzai prune left|top|right
-  bonzai reset             plant a new tree
+\x1b[38;5;180mUSAGE\x1b[0m
+  bonzai <command> [options]
 
-Data: ~/.local/share/bonzai (or $XDG_DATA_HOME/bonzai)
+\x1b[38;5;180mCARE\x1b[0m
+  \x1b[38;5;110mwater\x1b[0m                    Water the tree
+  \x1b[38;5;221mlight\x1b[0m left|center|right  Move its light source
+  \x1b[38;5;151mprune\x1b[0m left|top|right     Shape future growth
+
+\x1b[38;5;180mOBSERVE\x1b[0m
+  watch                    Open the interactive, cozy live view
+  show                     Render the current tree once
+  status                   Show compact health and growth stats
+
+\x1b[38;5;180mLIFECYCLE\x1b[0m
+  init                     Plant a new tree
+  start                    Start the background daemon
+  stop                     Stop the daemon
+  reset                    Plant a completely new tree
+
+\x1b[38;5;180mINFO\x1b[0m
+  help, -h, --help         Show this help
+  version, -V, --version   Print the version
+
+\x1b[2mInteractive keys\x1b[0m
+  w water   a/s/d light   j/k/l prune   h/? help   q leave
+
+\x1b[2mData: ~/.local/share/bonzai or $XDG_DATA_HOME/bonzai\x1b[0m
 "#);
 }
 
