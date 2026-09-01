@@ -454,13 +454,14 @@ fn draw_branch(
                 || (branch_dir > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
 
             if !pruned {
+                let child_life = (life / 2 + rng.range(1, 4)).max(3);
                 draw_branch(
                     c,
                     rng,
                     x,
                     y,
                     branch_dir,
-                    (life / 2 + rng.range(1, 4)).max(3),
+                    child_life,
                     depth + 1,
                     tropism,
                     vigor,
