@@ -23,6 +23,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Prepare compact fallback
+        run: sed -i 's/terminal too small for the tree/terminal too small/' tools/visual_fix_v026.py
+
       - name: Apply visual fixes
         run: python3 tools/visual_fix_v026.py
 
