@@ -13,4 +13,15 @@ if start != -1:
         raise SystemExit("could not locate end of optional usage patch")
     s = s[:start] + s[end + len(end_marker):]
 
+# The refactor generator is itself Python that emits Rust source. The planter
+# contains literal backslashes, so make those generated Rust literals raw.
+s = s.replace(
+    r'        ("       \\               /       ", 7u8),',
+    r'        (r"       \\               /       ", 7u8),',
+)
+s = s.replace(
+    r'        ("        \\_____________/        ", 7u8),',
+    r'        (r"        \\_____________/        ", 7u8),',
+)
+
 path.write_text(s)
