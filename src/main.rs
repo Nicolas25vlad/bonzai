@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.2.1";
+const VERSION: &str = "0.2.2";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 850;
 
@@ -96,8 +96,7 @@ impl State {
         }
 
         if self.water > 88.0 {
-            self.wet_stress =
-                (self.wet_stress + (self.water - 88.0) / 12.0 * dt_hours).min(120.0);
+            self.wet_stress = (self.wet_stress + (self.water - 88.0) / 12.0 * dt_hours).min(120.0);
         } else {
             self.wet_stress = (self.wet_stress - 0.25 * dt_hours).max(0.0);
         }
@@ -105,8 +104,7 @@ impl State {
         let water_score = triangular(self.water, 58.0, 55.0);
         let light_score = triangular(self.light, 70.0, 65.0);
         let stress_penalty = ((self.drought_stress + self.wet_stress) / 90.0).min(0.45);
-        let comfort =
-            (water_score * 0.58 + light_score * 0.42 - stress_penalty).clamp(0.0, 1.0);
+        let comfort = (water_score * 0.58 + light_score * 0.42 - stress_penalty).clamp(0.0, 1.0);
         let target_health = 30.0 + comfort * 70.0;
         self.health += (target_health - self.health) * (0.07 * dt_hours).min(0.6);
         self.health = self.health.clamp(0.0, 100.0);
@@ -197,8 +195,7 @@ fn data_dir() -> PathBuf {
     if let Ok(x) = env::var("XDG_DATA_HOME") {
         PathBuf::from(x).join("bonzai")
     } else {
-        PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join(".local/share/bonzai")
+        PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into())).join(".local/share/bonzai")
     }
 }
 
@@ -247,7 +244,9 @@ fn save_state(st: &State) -> io::Result<()> {
 }
 
 fn daemon_running() -> bool {
-    UnixStream::connect(socket_path()).is_ok()
+    send("ping")
+        .map(|reply| reply.trim() == "pong")
+        .unwrap_or(false)
 }
 
 fn send(cmd: &str) -> io::Result<String> {
@@ -281,7 +280,9 @@ fn daemon_loop() -> io::Result<()> {
                 BufReader::new(stream.try_clone()?).read_line(&mut line)?;
                 let response = handle_command(&mut st, line.trim(), &mut should_stop);
                 save_state(&st)?;
-                stream.write_all(response.as_bytes())?;
+                // A health probe or client may disconnect before reading the reply.
+                // That must never terminate the authoritative daemon.
+                let _ = stream.write_all(response.as_bytes());
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) => return Err(e),
@@ -437,7 +438,11 @@ fn draw_branch(
         y -= 1;
 
         let (glyph, kind) = if depth == 0 {
-            if life > 7 { ('┃', 5) } else { ('│', 1) }
+            if life > 7 {
+                ('┃', 5)
+            } else {
+                ('│', 1)
+            }
         } else if dir < 0 {
             ('╱', 1)
         } else if dir > 0 {
@@ -450,7 +455,9 @@ fn draw_branch(
         let branch_chance = ((10.0 + life as f32 * 0.6) * vigor).clamp(3.0, 22.0) as u64;
         if life > 5 && depth < 3 && rng.chance(branch_chance, 100) {
             let branch_dir = if rng.chance(1, 2) { -1 } else { 1 };
-            let pruned = (branch_dir < 0 && prune_left > 0 && rng.chance(prune_left.min(8) as u64, 10))
+            let pruned = (branch_dir < 0
+                && prune_left > 0
+                && rng.chance(prune_left.min(8) as u64, 10))
                 || (branch_dir > 0 && prune_right > 0 && rng.chance(prune_right.min(8) as u64, 10));
 
             if !pruned {
@@ -578,7 +585,12 @@ fn grow_tree(st: &State, w: i32, h: i32) -> Canvas {
         let sx = base_x - row.chars().count() as i32 / 2;
         for (j, ch) in row.chars().enumerate() {
             if ch != ' ' {
-                c.set(sx + j as i32, base_y + i as i32, ch, if ch == '░' { 6 } else { 7 });
+                c.set(
+                    sx + j as i32,
+                    base_y + i as i32,
+                    ch,
+                    if ch == '░' { 6 } else { 7 },
+                );
             }
         }
     }
@@ -606,18 +618,69 @@ fn mood(st: &State) -> &'static str {
 }
 
 fn terminal_size() -> (usize, usize) {
+    let env_rows = env::var("LINES").ok().and_then(|v| v.parse::<usize>().ok());
+    let env_cols = env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+    if let (Some(rows), Some(cols)) = (env_rows, env_cols) {
+        if rows > 0 && cols > 0 {
+            return (rows, cols);
+        }
+    }
+
+    let tput_lines = Command::new("tput")
+        .arg("lines")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<usize>().ok());
+    let tput_cols = Command::new("tput")
+        .arg("cols")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<usize>().ok());
+    if let (Some(rows), Some(cols)) = (tput_lines, tput_cols) {
+        if rows > 0 && cols > 0 {
+            return (rows, cols);
+        }
+    }
+
+    if let Ok(out) = Command::new("stty")
+        .args(["-F", "/dev/tty", "size"])
+        .output()
+    {
+        if out.status.success() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                let mut parts = s.split_whitespace();
+                if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
+                    if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
+                        if rows > 0 && cols > 0 {
+                            return (rows, cols);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Ok(out) = Command::new("stty").arg("size").output() {
         if out.status.success() {
             if let Ok(s) = String::from_utf8(out.stdout) {
                 let mut parts = s.split_whitespace();
                 if let (Some(rows), Some(cols)) = (parts.next(), parts.next()) {
                     if let (Ok(rows), Ok(cols)) = (rows.parse::<usize>(), cols.parse::<usize>()) {
-                        return (rows, cols);
+                        if rows > 0 && cols > 0 {
+                            return (rows, cols);
+                        }
                     }
                 }
             }
         }
     }
+
     (40, 100)
 }
 
@@ -759,9 +822,21 @@ fn centered_overlay(lines: &[String]) -> String {
 
 fn animate_water(st: &State) -> io::Result<()> {
     let frames = [
-        vec![format!("{WATER}      ·{RESET}"), String::new(), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
-        vec![format!("{WATER}    ·   ·{RESET}"), format!("{WATER}      ·{RESET}"), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
-        vec![format!("{WATER}  ˙ · ˙ · ˙{RESET}"), format!("{MUTED}the soil darkens gently{RESET}"), format!("water  {} {:>5.1}%", bar(st.water, 12), st.water)],
+        vec![
+            format!("{WATER}      ·{RESET}"),
+            String::new(),
+            format!("water  {} {:>5.1}%", bar(st.water, 12), st.water),
+        ],
+        vec![
+            format!("{WATER}    ·   ·{RESET}"),
+            format!("{WATER}      ·{RESET}"),
+            format!("water  {} {:>5.1}%", bar(st.water, 12), st.water),
+        ],
+        vec![
+            format!("{WATER}  ˙ · ˙ · ˙{RESET}"),
+            format!("{MUTED}the soil darkens gently{RESET}"),
+            format!("water  {} {:>5.1}%", bar(st.water, 12), st.water),
+        ],
     ];
 
     for frame in frames {
@@ -785,8 +860,16 @@ fn animate_light(direction: &str, st: &State) -> io::Result<()> {
     };
 
     let frames = [
-        vec![source.clone(), format!("{MUTED}{direction_label}{RESET}"), format!("light {} {:>5.1}%", bar(st.light, 12), st.light)],
-        vec![source, format!("{MUTED}the crown slowly remembers{RESET}"), format!("light {} {:>5.1}%", bar(st.light, 12), st.light)],
+        vec![
+            source.clone(),
+            format!("{MUTED}{direction_label}{RESET}"),
+            format!("light {} {:>5.1}%", bar(st.light, 12), st.light),
+        ],
+        vec![
+            source,
+            format!("{MUTED}the crown slowly remembers{RESET}"),
+            format!("light {} {:>5.1}%", bar(st.light, 12), st.light),
+        ],
     ];
 
     for frame in frames {
@@ -799,8 +882,15 @@ fn animate_light(direction: &str, st: &State) -> io::Result<()> {
 
 fn animate_prune(side: &str, st: &State) -> io::Result<()> {
     let frames = [
-        vec![format!("{HEALTH}✂{RESET}"), format!("{MUTED}{side} branch{RESET}")],
-        vec![format!("{HEALTH}✂ ·{RESET}"), format!("{MUTED}a clean cut{RESET}"), format!("health {} {:>5.1}%", bar(st.health, 12), st.health)],
+        vec![
+            format!("{HEALTH}✂{RESET}"),
+            format!("{MUTED}{side} branch{RESET}"),
+        ],
+        vec![
+            format!("{HEALTH}✂ ·{RESET}"),
+            format!("{MUTED}a clean cut{RESET}"),
+            format!("health {} {:>5.1}%", bar(st.health, 12), st.health),
+        ],
     ];
     for frame in frames {
         print!("{}", centered_overlay(&frame));
@@ -839,7 +929,9 @@ fn watch_help() -> String {
 }
 
 fn drain_input() {
-    let _ = Command::new("stty").args(["min", "0", "time", "0"]).status();
+    let _ = Command::new("stty")
+        .args(["min", "0", "time", "0"])
+        .status();
     let mut buf = [0u8; 64];
     loop {
         match io::stdin().read(&mut buf) {
@@ -847,7 +939,9 @@ fn drain_input() {
             Ok(_) => {}
         }
     }
-    let _ = Command::new("stty").args(["min", "0", "time", "1"]).status();
+    let _ = Command::new("stty")
+        .args(["min", "0", "time", "1"])
+        .status();
 }
 
 fn watch() -> io::Result<()> {
@@ -934,9 +1028,13 @@ fn watch() -> io::Result<()> {
                     'h' | '?' => {
                         print!("{}", watch_help());
                         io::stdout().flush()?;
-                        let _ = Command::new("stty").args(["min", "1", "time", "0"]).status();
+                        let _ = Command::new("stty")
+                            .args(["min", "1", "time", "0"])
+                            .status();
                         let _ = io::stdin().read(&mut buf);
-                        let _ = Command::new("stty").args(["min", "0", "time", "1"]).status();
+                        let _ = Command::new("stty")
+                            .args(["min", "0", "time", "1"])
+                            .status();
                         drain_input();
                     }
                     _ => {}
@@ -959,6 +1057,11 @@ fn start_daemon() -> io::Result<()> {
         println!("bonzai is already growing");
         return Ok(());
     }
+
+    // Clean up stale runtime files left by an interrupted or upgraded daemon.
+    let _ = fs::remove_file(socket_path());
+    let _ = fs::remove_file(pid_path());
+
     if !state_path().exists() {
         save_state(&State::new())?;
     }
@@ -969,14 +1072,56 @@ fn start_daemon() -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    for _ in 0..20 {
+    for _ in 0..40 {
         thread::sleep(Duration::from_millis(50));
         if daemon_running() {
             println!("bonzai started");
             return Ok(());
         }
     }
-    Err(io::Error::other("daemon failed to start"))
+    Err(io::Error::other(
+        "daemon failed to start; try `bonzai daemon-run` for diagnostics",
+    ))
+}
+
+fn self_update() -> io::Result<()> {
+    const INSTALL_URL: &str =
+        "https://raw.githubusercontent.com/Nicolas25vlad/bonzai/main/install.sh";
+    let was_running = daemon_running();
+    if was_running {
+        let _ = send("stop");
+        thread::sleep(Duration::from_millis(180));
+    }
+
+    println!("checking for the latest bonzai...");
+    let download = Command::new("curl").args(["-fsSL", INSTALL_URL]).output()?;
+    if !download.status.success() {
+        return Err(io::Error::other("failed to download the installer"));
+    }
+
+    let mut child = Command::new("bash").stdin(Stdio::piped()).spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&download.stdout)?;
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(io::Error::other(
+            "update failed while building the new version",
+        ));
+    }
+
+    if was_running {
+        let exe = env::current_exe()?;
+        let status = Command::new(exe).arg("start").status()?;
+        if !status.success() {
+            return Err(io::Error::other(
+                "updated successfully, but the daemon could not restart",
+            ));
+        }
+    }
+
+    println!("bonzai is up to date");
+    Ok(())
 }
 
 fn print_status(st: &State) {
@@ -1060,7 +1205,7 @@ fn main() -> io::Result<()> {
         }
         "watch" => {
             if !daemon_running() {
-                let _ = start_daemon();
+                start_daemon()?;
             }
             watch()
         }
@@ -1091,6 +1236,7 @@ fn main() -> io::Result<()> {
             usage();
             Ok(())
         }
+        "update" => self_update(),
         "version" | "--version" | "-V" => {
             println!("bonzai {VERSION}");
             Ok(())
