@@ -1,0 +1,13 @@
+[Unit]
+Description=Bonzai persistent terminal bonsai
+Documentation=https://github.com/Nicolas25vlad/bonzai
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/bonzai daemon-run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
