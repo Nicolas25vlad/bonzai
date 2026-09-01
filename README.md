@@ -8,8 +8,8 @@ Bonzai is a lightweight terminal companion written in Rust. It grows over real t
 
 [![CI](https://github.com/Nicolas25vlad/bonzai/actions/workflows/ci.yml/badge.svg)](https://github.com/Nicolas25vlad/bonzai/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)](https://www.rust-lang.org/)
-[![Dependencies](https://img.shields.io/badge/dependencies-0-success)](#zero-dependency-core)
-[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](#license)
+[![Dependencies](https://img.shields.io/badge/Rust_dependencies-0-success)](#small-by-design)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](#credits--license)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Unix-lightgrey)](#compatibility)
 
 **Persistent state · Procedural growth · Environmental memory · Zero external Rust dependencies**
@@ -19,88 +19,157 @@ Bonzai is a lightweight terminal companion written in Rust. It grows over real t
 ---
 
 ```text
-                         %%%
-                    %%%*%%%%%%
-                 %%+%%%%%&%%%%
-                    \\ | /
-              %%&%%  \\|/  %%%
-           %%%%%%%\\  |  /%%%%%
-                  \\ | /
-                   \\|/
-                    |
-                    |
-               .-~~~~-.
-              /        \
-             /__________\
-               \______/
+                         &&&&&&&&
+                    &&&&&&&&&&&&&&
+                 &&&&&&&     &&&&&&
+                    \\|       |/
+            &&&&&    \\|_____/    &&&&
+               \\_____\|/  &&&&&&
+                       /|\\
+                 _____/ | \\_
+                /       |   \
+                       /~
+                       \\|
 
-  age 4d   growth 38.2%   light memory 27.4h
-  water   ███████░░░ 72%   light  ████████░░ 81% →
-  health  █████████░ 94%
+                 .-----------------.
+                  \\               /
+                   \\_____________/
+                   (_)         (_)
+
+      water ━━━━━━━─── 72%   light ━━━━━━━━── 81% →   health ━━━━━━━━━─ 94%
 ```
 
-Most terminal toys disappear when their process exits.
+Most terminal toys disappear when their process exits. **Bonzai persists.**
 
-Bonzai is built around the opposite idea: **the plant persists**.
-
-Water it, move its light source, prune it, close the terminal, spend a few hours coding, and come back later. Its state and growth history are still there.
+Water it, move its light, prune it, close the terminal, spend a few hours coding, and come back later. The same tree is still there, carrying the history of how it was treated.
 
 > [!NOTE]
-> Bonzai is currently **early alpha software**. The core interaction loop is functional, while the biological model, renderer, pruning system and compatibility layer are still evolving.
-
-## Overview
-
-Bonzai combines a small persistent simulation with deterministic procedural rendering.
-
-The project is intentionally designed around a few constraints:
-
-- remain lightweight enough to run quietly in the background;
-- make care decisions influence future structure, not only UI counters;
-- keep the simulation understandable and auditable;
-- feel native inside a shell, editor or tmux workflow;
-- avoid turning a calm terminal toy into another productivity tracker.
-
-There are no accounts, streaks, notifications or cloud services.
-
-## Highlights
-
-- **Persistent real-time simulation** based on elapsed wall-clock time
-- **Environmental memory** for directional light and water stress
-- **Phototropic growth bias** toward historically stronger light
-- **Stress-aware foliage density** under drought or overwatering
-- **Low-light stretching** inspired by plant etiolation
-- **Persistent pruning pressure** that changes future branching
-- **Deterministic procedural generation** using branch and foliage walkers
-- **Interactive terminal mode** with direct keyboard controls
-- **Short ANSI animations** for watering, lighting and pruning actions
-- **Warm 256-color palette** designed for low-distraction terminal use
-- **Unix socket IPC** between the CLI and background daemon
-- **XDG-aware state and runtime paths**
-- **Zero external Rust dependencies**
-- Optional **systemd user service**
+> Bonzai is early alpha software. The core loop is usable, tested and intentionally small, but the growth model and pruning system are still evolving.
 
 ## Quick start
 
-### Install
+Install the latest version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Nicolas25vlad/bonzai/main/install.sh | bash
 ```
 
-Ensure `~/.local/bin` is available in your `PATH`.
-
-For Fish:
+If `~/.local/bin` is not already in your `PATH`, Fish users can add it with:
 
 ```fish
 fish_add_path ~/.local/bin
 ```
 
-### Plant and start
+Plant a tree and open the live view:
 
 ```bash
 bonzai init
 bonzai start
 bonzai watch
+```
+
+Future updates are built in:
+
+```bash
+bonzai update
+```
+
+## Why Bonzai
+
+| | |
+| --- | --- |
+| **Persistent** | Growth is based on elapsed real time, not how long the viewer stays open. |
+| **Environmental** | Directional light, drought and overwatering leave memory that influences future growth. |
+| **Procedural** | The visible tree is reconstructed deterministically from its persistent state. |
+| **Terminal-native** | It is designed to sit beside your shell, editor or tmux session rather than imitate a desktop app. |
+| **Local** | No account, cloud service, telemetry or network daemon is required. |
+| **Small** | The Rust core has zero external crate dependencies. |
+
+No streaks. No notifications. No productivity guilt. It is just a small tree that waits for you.
+
+## Care for the tree
+
+The same actions are available from the shell and from `bonzai watch`.
+
+| Action | CLI | Live key |
+| --- | --- | :---: |
+| Water | `bonzai water` | `w` / `r` |
+| Light from the left | `bonzai light left` | `a` |
+| Light from above | `bonzai light center` | `s` |
+| Light from the right | `bonzai light right` | `d` |
+| Prune left | `bonzai prune left` | `j` |
+| Prune crown | `bonzai prune top` | `k` |
+| Prune right | `bonzai prune right` | `l` |
+| Help | `bonzai help` | `h` / `?` |
+| Leave the viewer | | `q` |
+
+Care animations happen inside the existing scene. The viewer does not switch to a separate animation screen.
+
+## Growth with memory
+
+Bonzai is not a scientific plant simulator. It borrows a few plant behaviors and turns them into readable rules:
+
+```text
+          elapsed time + care history
+                     │
+         ┌───────────┼───────────┐
+         │           │           │
+       water       light       pruning
+         │           │           │
+         └───────────┼───────────┘
+                     ▼
+              persistent state
+                     │
+                     ▼
+              branch growth
+                     │
+                     ▼
+               foliage pads
+                     │
+                     ▼
+               terminal tree
+```
+
+Keep the light on one side and new growth gradually favors it. Leave the tree in low light and shoots stretch more. Drought and repeated overwatering reduce vigor. Pruning suppresses future growth in the affected region.
+
+The current environment is a condition. **The shape of the tree is a history.**
+
+## Small by design
+
+Bonzai uses a tiny local architecture:
+
+```text
+┌──────────────┐       Unix socket       ┌──────────────┐
+│ CLI / viewer │ ◄─────────────────────► │    daemon    │
+└──────┬───────┘                         └──────┬───────┘
+       │                                      │
+       │ local render                         │ authoritative state
+       ▼                                      ▼
+  ANSI terminal                         XDG state file
+```
+
+The daemon owns mutable plant state and spends most of its time sleeping. The viewer keeps a local snapshot, synchronizes periodically, and renders locally instead of hammering the daemon on every frame.
+
+`bonzai watch` uses the terminal alternate screen and repaints the existing frame in place. Short care effects update the same scene instead of clearing and rebuilding the entire terminal between animation frames.
+
+The core currently relies only on Rust's standard library for Unix sockets, persistence, timekeeping, process management, deterministic pseudo-random generation and ANSI output.
+
+## Commands
+
+```text
+bonzai init
+bonzai start
+bonzai stop
+bonzai watch
+bonzai show
+bonzai status
+bonzai water
+bonzai light left|center|right
+bonzai prune left|top|right
+bonzai reset
+bonzai update
+bonzai help
+bonzai --version
 ```
 
 For automatic startup with your user session:
@@ -109,394 +178,75 @@ For automatic startup with your user session:
 git clone https://github.com/Nicolas25vlad/bonzai.git
 cd bonzai
 ./install.sh --systemd
-bonzai watch
 ```
 
-## Usage
+## Quality
 
-```text
-bonzai <command> [options]
-```
-
-Run the built-in command reference at any time:
+Every push and pull request runs the same quality gate:
 
 ```bash
-bonzai help
+cargo fmt --all -- --check
+cargo check --locked --all-targets
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --release --locked
 ```
 
-### Care
+The current suite includes **10 model/renderer unit tests** and **5 end-to-end CLI/daemon regression tests** covering state migration, deterministic rendering, simulation bounds, watering, directional light, pruning, persistence and daemon survival under repeated actions.
 
-```bash
-bonzai water
-bonzai light left
-bonzai light center
-bonzai light right
-bonzai prune left
-bonzai prune top
-bonzai prune right
-```
+## Project status
 
-### Observe
+The next major milestone is persistent branch structure. Today the tree is deterministically reconstructed from state; the longer-term goal is to give individual branches stable identities so pruning can operate on the actual visible branch rather than on a regional pressure value.
 
-```bash
-bonzai watch
-bonzai show
-bonzai status
-```
+Near-term work includes:
 
-### Lifecycle
-
-```bash
-bonzai init
-bonzai start
-bonzai stop
-bonzai reset
-```
-
-### Information
-
-```bash
-bonzai help
-bonzai version
-```
-
-## Interactive mode
-
-`bonzai watch` opens the live terminal view.
-
-```bash
-bonzai watch
-```
-
-| Key | Action |
-| --- | --- |
-| `w` | Water the bonsai |
-| `r` | Water with the rain animation |
-| `a` | Move the light left |
-| `s` | Center the light |
-| `d` | Move the light right |
-| `j` | Prune the left side |
-| `k` | Prune the crown |
-| `l` | Prune the right side |
-| `h` / `?` | Open the in-app help |
-| `q` | Leave the viewer |
-
-Actions are rendered as small ANSI animations. Closing the viewer does **not** stop the simulation.
-
-## Simulation model
-
-Bonzai is not intended to be a scientific plant simulator. It uses a small set of real biological ideas as understandable gameplay rules.
-
-### Environmental memory
-
-The plant does not react only to its current values. It also records accumulated environmental exposure.
-
-```text
-light_left_hours
-light_center_hours
-light_right_hours
-
-drought_stress
-wet_stress
-```
-
-This means a temporary light change has little effect, while sustained conditions gradually influence future structure.
-
-### Phototropism
-
-Directional light history is converted into a growth bias.
-
-If the right side remains brighter for a meaningful amount of time, newly generated branches and foliage become increasingly likely to favor that side.
-
-The current lamp position is a condition. **The shape of the tree is a history.**
-
-### Low-light response
-
-Low light reduces branching density and increases vertical spacing between growth steps.
-
-This is a simplified approximation of etiolation: plants under insufficient light often stretch while searching for better exposure.
-
-### Water stress
-
-Water is treated as more than a single health meter.
-
-Extended drought and repeated overwatering accumulate separate stress values. Those values influence vigor, branch frequency, foliage density and growth rate.
-
-The system is deliberately forgiving. Bonzai should reward attention without punishing absence.
-
-### Pruning
-
-The current pruning model records structural pressure for the left side, crown and right side of the plant. Future branch walkers are suppressed according to that history.
-
-Branch-addressable pruning is planned for the persistent branch-graph milestone.
-
-## Procedural growth
-
-Bonzai uses deterministic walkers to construct the visible tree from persistent state.
-
-```text
-persistent state
-      │
-      ├── seed
-      ├── age
-      ├── growth
-      ├── health
-      ├── water stress
-      ├── directional light history
-      └── pruning history
-              │
-              ▼
-        branch walkers
-              │
-              ├── directional bias
-              ├── vigor
-              ├── internode spacing
-              └── pruning suppression
-              │
-              ▼
-       foliage walkers
-              │
-              ├── light-side preference
-              └── stress-dependent density
-              │
-              ▼
-          ANSI canvas
-```
-
-The same seed and state produce the same tree.
-
-Opening Bonzai does not roll a completely unrelated plant. The visible structure changes because the underlying state changes.
-
-## Architecture
-
-The simulation and presentation layers are intentionally separated.
-
-```text
-┌────────────────────┐
-│     bonzai CLI     │
-│                    │
-│ watch · water      │
-│ light · prune      │
-└─────────┬──────────┘
-          │
-      Unix socket
-          │
-┌─────────▼──────────┐
-│   Bonzai daemon    │
-│                    │
-│ authoritative      │
-│ plant state        │
-└─────────┬──────────┘
-          │
-   persistent state
-          │
-┌─────────▼──────────┐
-│ procedural renderer│
-│                    │
-│ branch + foliage   │
-│ reconstruction     │
-└────────────────────┘
-```
-
-The daemon is the single writer for plant state. It does not continuously render or run a high-frequency physics loop.
-
-Most of the time it sleeps.
-
-State progression is timestamp-driven, which allows Bonzai to account for elapsed time without spending CPU cycles simulating every second that passed.
-
-## Zero-dependency core
-
-Bonzai currently uses only the Rust standard library for:
-
-- Unix domain sockets
-- filesystem persistence
-- timekeeping
-- process management
-- deterministic pseudo-random generation
-- ANSI rendering
-- terminal input through `stty`
-
-There is no TUI framework or async runtime in the dependency graph.
-
-This is a design constraint, not a permanent rule. A future dependency should solve a real problem that justifies its cost.
-
-## State and runtime files
-
-Bonzai follows XDG conventions when available.
-
-Persistent state:
-
-```text
-$XDG_DATA_HOME/bonzai/state.txt
-```
-
-Fallback:
-
-```text
-~/.local/share/bonzai/state.txt
-```
-
-Runtime files:
-
-```text
-$XDG_RUNTIME_DIR/bonzai/
-```
-
-The state format is intentionally human-readable during early development.
-
-## systemd user service
-
-Install and enable the service:
-
-```bash
-./install.sh --systemd
-```
-
-Manual setup:
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/bonzai.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now bonzai.service
-```
-
-Inspect the service:
-
-```bash
-systemctl --user status bonzai
-```
-
-## Compatibility
-
-Bonzai currently targets Unix-like systems because it depends on:
-
-- Unix domain sockets
-- `stty`
-- ANSI terminal escape sequences
-
-| Platform | Status |
-| --- | --- |
-| Linux | Primary target |
-| macOS | Expected to require minor compatibility work |
-| BSD | Expected to require minor compatibility work |
-| WSL | Recommended Windows path |
-| Native Windows | Not currently targeted |
-
-## Design goals
-
-### Persistent, not demanding
-
-The plant should continue existing without becoming an obligation.
-
-### Calm by default
-
-Colors are muted, animations are short, and interaction is intentionally low-motion.
-
-### State has visible consequences
-
-Care actions should influence future growth rather than only modify numbers in a status panel.
-
-### Small, inspectable core
-
-The complete simulation should remain understandable without requiring a large framework or dependency graph.
-
-### Terminal-native interaction
-
-Bonzai should feel comfortable beside a shell, editor or tmux pane instead of imitating a desktop application inside a terminal.
-
-## Roadmap
-
-### 0.2.x · Interaction and environmental growth
-
-- [x] In-app help
-- [x] Cozy ANSI palette
-- [x] Care animations
-- [x] Directional light memory
-- [x] Phototropic growth bias
-- [x] Drought and overwatering memory
-- [x] Stress-aware foliage density
-- [ ] Better terminal resize handling
-- [ ] Configurable animation speed
-- [ ] Reduced-motion mode
-
-### 0.3 · Persistent structure
-
-- [ ] Persistent branch graph
-- [ ] Stable branch identifiers
-- [ ] Cursor-based branch selection
-- [ ] Branch-addressable pruning
-- [ ] Bud generation after cuts
-- [ ] Improved crown balancing
-
-### Future
-
-- [ ] Seasons
-- [ ] Soil profiles
-- [ ] Species profiles
-- [ ] Ambient weather events
-- [ ] tmux and status-line integrations
-- [ ] Shell prompt integration
-- [ ] Optional Git activity integration
-- [ ] Plant import/export
-- [ ] Multi-tree gardens
+- persistent branch graph and stable branch IDs
+- cursor-based, branch-addressable pruning
+- better terminal resize handling
+- richer crown balancing and growth silhouettes
+- optional seasons and species profiles
 
 ## Development
-
-Clone the repository:
 
 ```bash
 git clone https://github.com/Nicolas25vlad/bonzai.git
 cd bonzai
+cargo run -- watch
 ```
 
-Run locally:
+Before opening a pull request:
 
 ```bash
-cargo run -- help
+cargo fmt --all -- --check
+cargo check --locked --all-targets
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
-Validation:
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines and [`SECURITY.md`](SECURITY.md) for security reporting.
 
-```bash
-cargo check --locked
-cargo test --locked
-cargo build --release --locked
-```
+## Compatibility
 
-GitHub Actions runs the same core validation on pushes and pull requests.
+| Platform | Status |
+| --- | --- |
+| Linux | Primary target |
+| WSL | Recommended Windows path |
+| macOS | Expected to work with minor compatibility caveats |
+| BSD | Expected to work with minor compatibility caveats |
+| Native Windows | Not currently targeted |
 
-## Contributing
+Bonzai currently depends on Unix domain sockets, ANSI terminal support and `stty`.
 
-Contributions are welcome, particularly in:
+## Credits & license
 
-- procedural generation
-- plant-inspired simulation rules
-- terminal compatibility
-- low-motion animation design
-- state migration
-- documentation
+Bonzai is strongly inspired by [`cbonsai`](https://github.com/jakobrees/cbonsai), particularly its terminal-first visual language and procedural branching approach. Bonzai takes that idea in a different direction by focusing on a persistent tree, environmental history and interactive care.
 
-Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
-
-For simulation changes, prefer **small rules with visible consequences** over large amounts of hidden complexity.
-
-## Credits
-
-Bonzai is visually and algorithmically inspired by [`cbonsai`](https://github.com/jakobrees/cbonsai), an ncurses bonsai generator whose procedural branching approach helped shape the renderer used in this project.
-
-Bonzai extends that idea in a different direction, focusing on persistent state, environmental history, care mechanics and long-lived growth rather than one-shot tree generation.
-
-## License
-
-Bonzai is distributed under the **GNU General Public License v3.0 or later**.
-
-See [`LICENSE`](LICENSE) for the full license text.
+Bonzai is distributed under **GPL-3.0-or-later**. See [`LICENSE`](LICENSE) for the project licensing notice and GPL reference.
 
 ---
 
 <div align="center">
 
-**No streaks. No cloud. No notifications. Just a small tree waiting in your terminal.**
+**A quiet little tree for the space between commits.**
 
 </div>
