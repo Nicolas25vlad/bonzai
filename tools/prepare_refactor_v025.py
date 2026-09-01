@@ -24,4 +24,6 @@ s = s.replace(
     r'        (r"        \\_____________/        ", 7u8),',
 )
 
+# Keep this preparer intentionally idempotent so a failed validation can be
+# rerun safely after test/CI fixes without touching production source first.
 path.write_text(s)
