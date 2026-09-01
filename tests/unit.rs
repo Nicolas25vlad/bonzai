@@ -10,7 +10,7 @@ mod app {
         fn stable_state() -> State {
             let mut st = State::new();
             let now = now_secs();
-            st.seed = 0xB0_5A_1;
+            st.seed = 0x000B_05A1;
             st.born_at = now.saturating_sub(1_000);
             st.last_tick = now;
             st.water = 72.0;
