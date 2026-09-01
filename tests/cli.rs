@@ -115,7 +115,10 @@ fn version_and_help_are_available() {
 
     let version = env.assert_ok(&["--version"]);
     let version = String::from_utf8_lossy(&version.stdout);
-    assert!(version.starts_with("bonzai "), "unexpected version output: {version}");
+    assert!(
+        version.starts_with("bonzai "),
+        "unexpected version output: {version}"
+    );
 
     let help = env.assert_ok(&["help"]);
     let help = String::from_utf8_lossy(&help.stdout);
@@ -153,7 +156,10 @@ fn init_creates_a_complete_bounded_state_file() {
 
     for key in ["water", "light", "health", "growth"] {
         let value = state_f32(&state, key);
-        assert!((0.0..=100.0).contains(&value), "{key} out of bounds: {value}");
+        assert!(
+            (0.0..=100.0).contains(&value),
+            "{key} out of bounds: {value}"
+        );
     }
 }
 
@@ -166,7 +172,10 @@ fn daemon_round_trip_updates_and_persists_water() {
     let before = state_f32(&env.state(), "water");
     env.assert_ok(&["water"]);
     let after = state_f32(&env.state(), "water");
-    assert!(after > before, "watering did not increase water: {before} -> {after}");
+    assert!(
+        after > before,
+        "watering did not increase water: {before} -> {after}"
+    );
     assert!(after <= 100.0);
 
     let status = env.assert_ok(&["status"]);
@@ -176,7 +185,10 @@ fn daemon_round_trip_updates_and_persists_water() {
     thread::sleep(Duration::from_millis(220));
 
     let persisted = state_f32(&env.state(), "water");
-    assert!((persisted - after).abs() < 0.2, "state changed across stop: {after} -> {persisted}");
+    assert!(
+        (persisted - after).abs() < 0.2,
+        "state changed across stop: {after} -> {persisted}"
+    );
 }
 
 #[test]
@@ -191,10 +203,16 @@ fn repeated_watering_is_bounded_and_does_not_kill_the_daemon() {
 
     let water = state_f32(&env.state(), "water");
     assert!(water <= 100.0, "water exceeded 100%: {water}");
-    assert!(water >= 90.0, "water unexpectedly low after repeated watering: {water}");
+    assert!(
+        water >= 90.0,
+        "water unexpectedly low after repeated watering: {water}"
+    );
 
     let status = env.assert_ok(&["status"]);
-    assert!(status.status.success(), "daemon stopped responding after repeated actions");
+    assert!(
+        status.status.success(),
+        "daemon stopped responding after repeated actions"
+    );
 }
 
 #[test]
