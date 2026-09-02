@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.3.0";
+const VERSION: &str = "0.3.1";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
 
@@ -639,7 +639,10 @@ fn handle_command(st: &mut State, cmd: &str, stop: &mut bool) -> String {
         "ping" => "pong\n".into(),
         "snapshot" => st.serialize(),
         "water" => {
-            if st.water >= 96.0 {
+            // Match the rounded percentage shown by the UI. Values below 99.5%
+            // are still visibly below 100%, so watering must be allowed to top
+            // the reservoir off instead of trapping it around 96-99%.
+            if st.water >= 99.5 {
                 return format!("Water already high: {:.0}%\n", st.water);
             }
             st.water = (st.water + 22.0).min(100.0);

@@ -120,6 +120,32 @@ mod app {
         }
 
         #[test]
+        fn watering_from_ninety_seven_reaches_one_hundred() {
+            let mut st = stable_state();
+            st.water = 97.0;
+            let mut stop = false;
+
+            let response = handle_command(&mut st, "water", &mut stop);
+
+            assert!((st.water - 100.0).abs() < f32::EPSILON);
+            assert_eq!(response, "Water: 100%\n");
+            assert!(!stop);
+        }
+
+        #[test]
+        fn rounded_full_water_does_not_overwater() {
+            let mut st = stable_state();
+            st.water = 99.6;
+            let mut stop = false;
+
+            let response = handle_command(&mut st, "water", &mut stop);
+
+            assert!((st.water - 99.6).abs() < 0.001);
+            assert_eq!(response, "Water already high: 100%\n");
+            assert!(!stop);
+        }
+
+        #[test]
         fn light_and_pruning_commands_change_only_expected_directional_state() {
             let mut st = stable_state();
             let mut stop = false;
