@@ -1,0 +1,44 @@
+name: Apply v0.3.2 health model
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_health_v032.py'
+      - '.github/workflows/apply-health-v032.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply health model fix
+        run: python3 tools/fix_health_v032.py
+
+      - name: Validate
+        run: |
+          cargo fmt --all
+          cargo check --locked --all-targets
+          cargo test --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo build --release --locked
+
+      - name: Commit health fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.rs tests/unit.rs Cargo.toml Cargo.lock
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: make health reward sufficient water and light"
+          git push
