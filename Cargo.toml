@@ -1,6 +1,6 @@
 [package]
 name = "bonzai"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "A tiny persistent bonsai that lives in your terminal"
 license = "GPL-3.0-or-later"

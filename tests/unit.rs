@@ -32,11 +32,30 @@ mod app {
         }
 
         #[test]
-        fn triangular_score_peaks_at_center_and_clamps() {
-            assert!((triangular(50.0, 50.0, 20.0) - 1.0).abs() < f32::EPSILON);
-            assert!((triangular(30.0, 50.0, 20.0) - 0.0).abs() < f32::EPSILON);
-            assert!((triangular(70.0, 50.0, 20.0) - 0.0).abs() < f32::EPSILON);
-            assert!((triangular(-100.0, 50.0, 20.0) - 0.0).abs() < f32::EPSILON);
+        fn availability_score_saturates_instead_of_penalizing_high_values() {
+            assert!((availability_score(10.0, 10.0, 45.0) - 0.0).abs() < f32::EPSILON);
+            assert!((availability_score(45.0, 10.0, 45.0) - 1.0).abs() < f32::EPSILON);
+            assert!((availability_score(99.0, 10.0, 45.0) - 1.0).abs() < f32::EPSILON);
+            assert!((availability_score(-100.0, 10.0, 45.0) - 0.0).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn high_water_and_light_without_existing_stress_recover_health() {
+            let mut st = stable_state();
+            st.health = 80.0;
+            st.water = 99.0;
+            st.light = 99.0;
+            st.drought_stress = 0.0;
+            st.wet_stress = 0.0;
+            st.last_tick = 1_000;
+
+            st.advance_to(4_600);
+
+            assert!(
+                st.health > 80.0,
+                "health should recover at 99/99 resources: {}",
+                st.health
+            );
         }
 
         #[test]

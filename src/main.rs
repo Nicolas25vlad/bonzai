@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: &str = "0.3.1";
+const VERSION: &str = "0.3.2";
 const TICK_SECS: u64 = 30;
 const ACTION_COOLDOWN_MS: u64 = 420;
 
@@ -393,8 +393,12 @@ impl State {
             self.wet_stress = (self.wet_stress - 0.25 * dt_hours).max(0.0);
         }
 
-        let water_score = triangular(self.water, 58.0, 55.0);
-        let light_score = triangular(self.light, 70.0, 65.0);
+        // Water and light are resources: once there is enough of either,
+        // availability stays saturated instead of falling again near 100%.
+        // Harm from excess water is modeled separately through wet_stress,
+        // which depends on how long the soil remains saturated.
+        let water_score = availability_score(self.water, 10.0, 45.0);
+        let light_score = availability_score(self.light, 15.0, 60.0);
         let stress_penalty = ((self.drought_stress + self.wet_stress) / 90.0).min(0.45);
         let comfort = (water_score * 0.58 + light_score * 0.42 - stress_penalty).clamp(0.0, 1.0);
         let target_health = 30.0 + comfort * 70.0;
@@ -507,8 +511,11 @@ impl State {
     }
 }
 
-fn triangular(x: f32, center: f32, width: f32) -> f32 {
-    (1.0 - ((x - center).abs() / width.max(1.0))).clamp(0.0, 1.0)
+fn availability_score(value: f32, floor: f32, full: f32) -> f32 {
+    if full <= floor {
+        return f32::from(value >= full);
+    }
+    ((value - floor) / (full - floor)).clamp(0.0, 1.0)
 }
 
 fn now_secs() -> u64 {
